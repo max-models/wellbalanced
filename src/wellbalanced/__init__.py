@@ -12,6 +12,7 @@ every species, the electron energy and Poisson's equation, implicit, with
 boundaries that can be changed between steps.
 """
 
+from wellbalanced.datasets import stack
 from wellbalanced.fluid1d import (
     Boundary,
     Fluid1D,
@@ -49,4 +50,5 @@ __all__ = [
     "Species",
     "VolumeSource",
     "WallReaction",
+    "stack",
 ]

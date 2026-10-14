@@ -4,11 +4,12 @@ Electrons and ions drift and diffuse in their own field (Poisson's equation),
 the electrons are heated uniformly and lose energy in ionization, which sustains
 the plasma against the losses to the walls. The plasma sits a few electron
 temperatures above the walls, with a sheath at each. The transport coefficients
-and the step cross section are illustrative, not argon data.
+and the step cross section are illustrative, not argon data. The steady state is
+an xarray dataset (``state.to_dataset()``), plotted with plasma-plots.
 """
 
-import matplotlib.pyplot as plt
 import numpy as np
+import plasma_plots
 from plasmacoll import CrossSection
 from plasmacoll.constants import ELECTRON_MASS
 
@@ -43,14 +44,10 @@ print(
     {k: f"{v:.3e}" for k, v in model.energy_balance(state).items()},
 )
 
-x = state.x * 1e3
-fig, axes = plt.subplots(1, 3, figsize=(11, 3.4))
-axes[0].plot(x, state.densities["e"], label="electrons")
-axes[0].plot(x, state.densities["Ar+"], "--", label="Ar$^+$")
-axes[0].set(xlabel="x (mm)", ylabel="density (m$^{-3}$)")
-axes[0].legend()
-axes[1].plot(x, state.electron_temperature)
-axes[1].set(xlabel="x (mm)", ylabel="electron temperature (eV)")
-axes[2].plot(x, state.potential)
-axes[2].set(xlabel="x (mm)", ylabel="potential (V)")
-fig.tight_layout()
+profiles = state.to_dataset()
+profiles = profiles.assign_coords(x=profiles.x * 1e3)
+profiles.x.attrs.update(long_name="x", units="mm")
+with plasma_plots.figure(1, 3, figsize=(12, 3.6)) as fig:
+    profiles.density.plasma.plot.profiles(x="x", over="species", ax=fig[0])
+    profiles.electron_temperature.plasma.plot.lineout(ax=fig[1])
+    profiles.potential.plasma.plot.lineout(ax=fig[2])

@@ -46,9 +46,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+import xarray as xr
 from plasmacoll import ChargeStateTransitions, charge_state_fractions
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
 
+from wellbalanced.datasets import variable
 from wellbalanced.global_model import (
     Chamber,
     Cusp,
@@ -167,6 +169,37 @@ class NeutralizerResult:
         return {
             s: float(f) for s, f in zip(self.states, self.fractions[-1], strict=True)
         }
+
+    def to_dataset(self) -> xr.Dataset:
+        """The beam along the channel (``state``, ``position``) and the plasma's state."""
+        plasma = self.plasma.to_dataset().rename({"converged": "plasma_converged"})
+        beam = xr.Dataset(
+            {
+                "fraction": variable(
+                    ("state", "position"), self.fractions.T, "fraction of the beam", "1"
+                ),
+                "neutral_fraction": variable(
+                    (), self.neutral_fraction, "neutral fraction at the exit", "1"
+                ),
+                "gas_density": variable(
+                    (), self.gas_density, "gas target density", "m^-3"
+                ),
+                "beam_power": variable((), self.beam_power, "power from the beam", "W"),
+                "converged": variable((), self.converged, "converged"),
+            },
+            coords={
+                "state": ("state", list(self.states), {"long_name": "charge state"}),
+                "position": (
+                    "position",
+                    self.position,
+                    {"long_name": "position along the channel", "units": "m"},
+                ),
+            },
+        )
+        # keep every variable's long_name and units
+        merged = xr.merge([beam, plasma], combine_attrs="override")
+        merged.attrs = {}
+        return merged
 
 
 @dataclass

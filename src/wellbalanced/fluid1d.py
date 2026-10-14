@@ -41,8 +41,10 @@ from dataclasses import dataclass, field
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+import xarray as xr
 from plasmacoll.constants import ELEMENTARY_CHARGE
 
+from wellbalanced.datasets import variable
 from wellbalanced.reactions import Reaction
 from wellbalanced.species import Species
 
@@ -183,6 +185,56 @@ class FluidState:
     def integral(self, values: np.ndarray) -> float:
         """The integral of a cell field over the domain."""
         return float(np.sum(values) * (self.faces[1] - self.faces[0]))
+
+    def to_dataset(self) -> xr.Dataset:
+        """The state as a labelled dataset.
+
+        Fields on the cells ``x``, fluxes on the faces ``x_face``, per ``species`` and
+        ``reaction``.
+        """
+        species = list(self.densities)
+        reactions = list(self.reaction_rates)
+        data = {
+            "density": variable(
+                ("species", "x"),
+                [self.densities[s] for s in species],
+                "density",
+                "m^-3",
+            ),
+            "electron_temperature": variable(
+                "x", self.electron_temperature, "electron temperature", "eV"
+            ),
+            "potential": variable("x", self.potential, "potential", "V"),
+            "flux": variable(
+                ("species", "x_face"),
+                [self.fluxes[s] for s in species],
+                "flux along x",
+                "m^-2 s^-1",
+            ),
+            "converged": variable((), self.converged, "converged"),
+        }
+        if "energy" in self.fluxes:
+            data["energy_flux"] = variable(
+                "x_face", self.fluxes["energy"], "electron energy flux", "eV m^-2 s^-1"
+            )
+        if reactions:
+            data["reaction_rate"] = variable(
+                ("reaction", "x"),
+                [
+                    np.broadcast_to(self.reaction_rates[r], self.x.shape)
+                    for r in reactions
+                ],
+                "reaction rate",
+                "m^-3 s^-1",
+            )
+        coords = {
+            "x": ("x", self.x, {"long_name": "x", "units": "m"}),
+            "x_face": ("x_face", self.faces, {"long_name": "x (faces)", "units": "m"}),
+            "species": ("species", species, {"long_name": "species"}),
+        }
+        if reactions:
+            coords["reaction"] = ("reaction", reactions, {"long_name": "reaction"})
+        return xr.Dataset(data, coords=coords, attrs={"time": self.time})
 
 
 @dataclass

@@ -40,6 +40,19 @@ print(state.power)  # every term of the electron energy balance, in W
 `model.scan("power", [50.0, 100.0, 200.0])` returns the steady states for several values,
 each starting from the last.
 
+Every result is also a labelled xarray dataset, `state.to_dataset()`, and a scan one
+dataset along its parameter:
+
+```python
+import plasma_plots  # registers the .plasma accessor
+
+from wellbalanced import stack
+
+powers = [50.0, 100.0, 200.0]
+scan = stack(model.scan("power", powers), "power", powers, units="W")
+scan.density.sel(species="e").plasma.plot.lineout()  # with plasma-plots
+```
+
 ## A 1D discharge
 
 The same reaction in a slab between two grounded walls, sustained by uniform heating:

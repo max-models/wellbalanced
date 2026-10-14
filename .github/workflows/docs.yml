@@ -28,10 +28,12 @@ jobs:
       smoke-paths: |
         getting-started/installation/index.html
         tutorials/index.html
-        tutorials/example-tutorial/index.html
+        tutorials/global-model/index.html
         full-examples/index.html
-        full-examples/sine-wave/index.html
-        api/app/index.html
-        api/app/main/index.html
-        tutorials/example-tutorial/example_tutorial.ipynb
-        full-examples/sine-wave/plot-1.png
+        full-examples/argon-global-model/index.html
+        full-examples/argon-discharge-1d/index.html
+        api/wellbalanced/index.html
+        api/wellbalanced/global_model/index.html
+        api/wellbalanced/fluid1d/index.html
+        tutorials/global-model/global_model.ipynb
+        full-examples/argon-global-model/plot-1.png

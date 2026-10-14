@@ -11,26 +11,57 @@ analysis](https://github.com/max-models/wellbalanced/actions/workflows/static_an
 [![PyPI](https://img.shields.io/pypi/v/wellbalanced.png)](https://pypi.org/project/wellbalanced/)
 [![Python](https://img.shields.io/pypi/pyversions/wellbalanced.png)](https://pypi.org/project/wellbalanced/)
 
-Template repository for Python projects: a `src/` package with a console
-entry point, `pytest` tests, GitHub Actions for tests, static analysis,
-tutorials, documentation and PyPI publishing, and an
-[Astro](https://astro.build/) +
-[Starlight](https://starlight.astro.build/) documentation site.
+Global (0D) and 1D fluid models of low-temperature plasmas.
+
+- **Global model** (`GlobalModel`): the density of every species, the
+  electron energy and optionally the gas temperature, balanced over the
+  volume of a chamber. Reactions, ions leaving through the walls at the
+  Bohm speed (with an edge-to-centre ratio) and through magnetic cusps
+  (hybrid leak width), neutral wall reactions, gas feed and pumping, and
+  volume sources such as a fast beam. Steady states in seconds, and
+  scans that continue from one steady state to the next.
+- **1D fluid model** (`Fluid1D`): drift-diffusion of every species with
+  Scharfetter-Gummel fluxes, the electron energy equation and Poisson’s
+  equation, fully implicit. Walls, prescribed densities or fluxes at
+  either end, changeable between steps, as the fluid side of a coupling
+  to a particle code.
+- **The data of the kinetic codes**: rates come from
+  [plasmacoll](https://github.com/max-models/plasmacoll)’s cross
+  sections averaged over a Maxwellian, the data its Monte Carlo
+  collisions use, so a fluid and a kinetic model of the same plasma
+  differ in their physics, not their data.
+
+The name: a *well-balanced* scheme keeps the steady states of its
+equations exactly, and steady balances are what this code is for.
 
 Documentation: <https://max-models.github.io/wellbalanced/>
 
-## Use the template
+## Example
 
-Create a repository from this template, then rename the package:
+``` python
+from plasmacoll import CrossSection
+from plasmacoll.constants import ELECTRON_MASS
 
-``` bash
-bash setup_project.sh my-app
-rm setup_project.sh
+from wellbalanced import ELECTRON, Chamber, GlobalModel, Reaction, Species
+
+argon, argon_ion = Species.atomic("Ar", 39.948), Species.atomic("Ar+", 39.948, 1)
+ionization = Reaction.from_cross_section(
+    ("e", "Ar"),
+    ("e", "e", "Ar+"),
+    CrossSection.constant(2.0e-20, threshold=15.76),
+    ELECTRON_MASS,
+    electron_energy_loss=15.76,
+)
+model = GlobalModel(
+    species=[ELECTRON, argon, argon_ion],
+    reactions=[ionization],
+    chamber=Chamber(volume=1.0e-3, wall_area=0.06, h_factor=0.5),
+    power=100.0,
+    fixed={"Ar": 1.0e20},
+)
+state = model.steady_state()
+print(state.electron_temperature, state.electron_density, state.power)
 ```
-
-This replaces `wellbalanced` with `my-app` everywhere, moves
-`src/app` to `src/my_app`, and points the entry point, tests and docs at
-it.
 
 ## Install
 
@@ -38,27 +69,12 @@ With [uv](https://docs.astral.sh/uv/):
 
 ``` bash
 make install    # uv sync --extra dev, plus the pre-commit hooks
-uv run wellbalanced
 ```
 
-Or create and activate a Python environment (3.10 or newer):
-
-``` bash
-python -m venv env
-source env/bin/activate
-pip install --upgrade pip
-```
-
-Install the code and requirements with pip:
+Or with pip, in a Python environment (3.10 or newer):
 
 ``` bash
 pip install -e .
-```
-
-Run the code with:
-
-``` bash
-wellbalanced
 ```
 
 The `test`, `docs` and `dev` extras install the test runner, the
@@ -112,9 +128,10 @@ make readme
 ## Releases
 
 Before merging a release to `main`, update the version in
-`pyproject.toml`, `src/wellbalanced/__init__.py` and `CITATION.cff` (including
-its release date), and add the release notes to `CHANGELOG.md`. The push
-to `main` creates a GitHub release with a `vX.Y.Z` tag and publishes the
-package to PyPI with trusted publishing (OIDC). The one-time PyPI and
-GitHub configuration is described in the [publishing
+`pyproject.toml`, `src/wellbalanced/__init__.py` and `CITATION.cff`
+(including its release date), and add the release notes to
+`CHANGELOG.md`. The push to `main` creates a GitHub release with a
+`vX.Y.Z` tag and publishes the package to PyPI with trusted publishing
+(OIDC). The one-time PyPI and GitHub configuration is described in the
+[publishing
 tutorial](https://max-models.github.io/wellbalanced/development/publishing/).

@@ -6,7 +6,7 @@ import { defineDocs } from '@max-models/starlight-theme';
 export default defineDocs({
 	repo: 'wellbalanced',
 	title: 'wellbalanced',
-	description: 'Template repository for Python projects.',
+	description: 'Global (0D) and 1D fluid models of low-temperature plasmas.',
 	pythonPackage: 'wellbalanced',
 	nav: [
 		{ label: 'Getting started', link: '/getting-started/installation/' },

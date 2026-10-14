@@ -17,11 +17,8 @@ Install the package and its requirements with pip:
 pip install -e .
 ```
 
-Run the code with:
-
-```bash
-wellbalanced
-```
+It needs [plasmacoll](https://github.com/max-models/plasmacoll) (cross sections and
+rate coefficients) and SciPy, which pip installs with it.
 
 ## Optional extras
 

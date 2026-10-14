@@ -25,6 +25,10 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   equation, fully implicit. Walls, prescribed densities or fluxes at
   either end, changeable between steps, as the fluid side of a coupling
   to a particle code.
+- **2D axial-azimuthal drift fluid of a magnetron** (`DriftFluid2D`): magnetised electrons
+  with the Hall tensor, inertial ions, neutral depletion and refill, the electron energy
+  and a semi-implicit Poisson solve; the gradient-drift instability and spoke diagnostics
+  (mode number, phase velocity against E x B, cathode modulation, potential hump).
 - **A beam-driven plasma neutralizer** (`wellbalanced.neutralizer`): a
   fast beam’s charge states on the gas and on the plasma it makes,
   coupled to a global model of the channel fed by the beam’s stripped

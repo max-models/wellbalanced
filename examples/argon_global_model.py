@@ -6,15 +6,17 @@ elastic losses, ions leaving at the Bohm speed. The particle balance alone sets 
 electron temperature, which falls with the pressure; the power balance then sets the
 density. Magnetic cusps that cover most of the wall lower both the losses and the
 electron temperature. The cross sections are illustrative step functions, not
-argon data.
+argon data. Every scan is one xarray dataset (:func:`wellbalanced.stack`), plotted
+with plasma-plots.
 """
 
-import matplotlib.pyplot as plt
 import numpy as np
+import plasma_plots
+import xarray as xr
 from plasmacoll import CrossSection
 from plasmacoll.constants import BOLTZMANN, ELECTRON_MASS
 
-from wellbalanced import ELECTRON, Chamber, Cusp, GlobalModel, Reaction, Species
+from wellbalanced import ELECTRON, Chamber, Cusp, GlobalModel, Reaction, Species, stack
 
 argon = Species.atomic("Ar", 39.948)
 argon_ion = Species.atomic("Ar+", 39.948, 1)
@@ -56,8 +58,8 @@ chambers = {
 
 pressures = np.geomspace(0.1, 10.0, 15)  # Pa
 gas = pressures / (BOLTZMANN * 300.0)  # m^-3
-fig, (ax_te, ax_ne) = plt.subplots(1, 2, figsize=(9, 3.6))
-for label, chamber in chambers.items():
+scans = []
+for chamber in chambers.values():
     model = GlobalModel(
         species=[ELECTRON, argon, argon_ion],
         reactions=reactions,
@@ -66,12 +68,18 @@ for label, chamber in chambers.items():
         fixed={"Ar": float(gas[0])},
     )
     states = model.scan("fixed", [{"Ar": float(n)} for n in gas])
-    ax_te.semilogx(
-        pressures, [s.electron_temperature for s in states], "o-", label=label
+    scans.append(stack(states, "pressure", pressures, units="Pa"))
+result = xr.concat(scans, dim="case").assign_coords(case=list(chambers))
+
+with plasma_plots.figure(1, 2, title="Argon, 500 W absorbed") as fig:
+    result.electron_temperature.plasma.plot.profiles(
+        x="pressure", over="case", logx=True, ax=fig[0]
     )
-    ax_ne.loglog(pressures, [s.electron_density for s in states], "o-", label=label)
-ax_te.set(xlabel="pressure (Pa)", ylabel="electron temperature (eV)")
-ax_ne.set(xlabel="pressure (Pa)", ylabel="electron density (m$^{-3}$)")
-ax_te.legend()
-fig.suptitle("Argon, 500 W absorbed")
-fig.tight_layout()
+    result.density.sel(species="e").plasma.plot.profiles(
+        x="pressure",
+        over="case",
+        logx=True,
+        logy=True,
+        title="electron density",
+        ax=fig[1],
+    )

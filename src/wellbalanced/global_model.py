@@ -32,15 +32,17 @@ then refining it with a root finder: :meth:`GlobalModel.steady_state`.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+import xarray as xr
 from plasmacoll.constants import BOLTZMANN, ELECTRON_MASS, ELEMENTARY_CHARGE
 from scipy.integrate import solve_ivp
 from scipy.optimize import root
 
+from wellbalanced.datasets import variable
 from wellbalanced.reactions import Reaction
 from wellbalanced.species import Species
 
@@ -161,20 +163,30 @@ class VolumeSource:
     ``v_b`` ionizing a gas with the cross section ``sigma``,
     ``rate = n_b sigma v_b`` and ``per = ("gas",)``). Each event changes the
     densities by ``changes`` and gives the electrons ``electron_energy`` (eV).
+    ``rate`` may be a function of the electron and gas temperatures in eV,
+    ``rate(T_e, T_g)``, for a source that follows the plasma, e.g. sputtering
+    by the ion flux to a target (``per = ("Ar+",)``, ``rate`` the Bohm flux
+    times the yield per volume).
     """
 
     changes: Mapping[str, int]
-    rate: float
+    rate: float | Callable[[float, float], float]
     per: Sequence[str] = ()
     electron_energy: float = 0.0
     name: str = "source"
 
     def __post_init__(self) -> None:
         """Validate the source."""
-        if self.rate < 0.0:
+        if not callable(self.rate) and self.rate < 0.0:
             raise ValueError("a source rate must be >= 0")
         object.__setattr__(self, "changes", dict(self.changes))
         object.__setattr__(self, "per", tuple(self.per))
+
+    def coefficient(self, electron_temperature: float, gas_temperature: float) -> float:
+        """Return ``rate`` at the temperatures (eV)."""
+        if callable(self.rate):
+            return float(self.rate(electron_temperature, gas_temperature))
+        return float(self.rate)
 
 
 @dataclass(frozen=True)
@@ -238,6 +250,55 @@ class GlobalState:
         """``sum n_- / n_e`` for the named negative ions."""
         return sum(self.densities[s] for s in negative_ions) / self.electron_density
 
+    def to_dataset(self) -> xr.Dataset:
+        """The state as a labelled dataset (dimensions ``species``, ``reaction``, ``channel``)."""
+        species = list(self.densities)
+        reactions = list(self.reaction_rates)
+        channels = list(self.power)
+        return xr.Dataset(
+            {
+                "density": variable(
+                    "species", [self.densities[s] for s in species], "density", "m^-3"
+                ),
+                "wall_loss": variable(
+                    "species",
+                    [self.wall_losses.get(s, 0.0) for s in species],
+                    "loss to the walls",
+                    "m^-3 s^-1",
+                ),
+                "particle_balance": variable(
+                    "species",
+                    [self.particle_balance[s] for s in species],
+                    "rate of change of the density",
+                    "m^-3 s^-1",
+                ),
+                "reaction_rate": variable(
+                    "reaction",
+                    [self.reaction_rates[r] for r in reactions],
+                    "reaction rate",
+                    "m^-3 s^-1",
+                ),
+                "electron_power": variable(
+                    "channel",
+                    [self.power[c] for c in channels],
+                    "electron power gained",
+                    "W",
+                ),
+                "electron_temperature": variable(
+                    (), self.electron_temperature, "electron temperature", "eV"
+                ),
+                "gas_temperature": variable(
+                    (), self.gas_temperature, "gas temperature", "eV"
+                ),
+                "converged": variable((), self.converged, "converged"),
+            },
+            coords={
+                "species": ("species", species, {"long_name": "species"}),
+                "reaction": ("reaction", reactions, {"long_name": "reaction"}),
+                "channel": ("channel", channels, {"long_name": "power channel"}),
+            },
+        )
+
 
 @dataclass
 class GlobalModel:
@@ -247,7 +308,9 @@ class GlobalModel:
         species: Every species, the electrons (named ``"e"``) included.
         reactions: The volume reactions.
         chamber: Volume, walls and confinement.
-        power: Power absorbed by the electrons in W.
+        power: Power absorbed by the electrons in W, or a function of the time in
+            s, ``power(t)``, for :meth:`GlobalModel.evolve` (a steady state is
+            then taken at ``t = 0``).
         fixed: Densities held fixed (m^-3), e.g. a gas at a given pressure.
         feed: Particles per second fed into the chamber, by species.
         pumping_speed: Volume per second (m^3/s) pumped out, of every neutral
@@ -257,12 +320,15 @@ class GlobalModel:
         ion_wall_products: What an ion returns to the volume after reaching
             the wall, ``{ion: {product: number}}``, e.g. ``{"H2+": {"H2": 1}}``.
         gas_temperature: A fixed gas temperature in eV, or its balance.
+        thermalize_electrons: Keep ``T_e >= T_g``. Without sources of energy the
+            wall losses cool the electrons of a decaying plasma below the gas,
+            which no elastic collision allows; set it for afterglows.
     """
 
     species: Sequence[Species]
     reactions: Sequence[Reaction]
     chamber: Chamber
-    power: float = 0.0
+    power: float | Callable[[float], float] = 0.0
     fixed: Mapping[str, float] = field(default_factory=dict)
     feed: Mapping[str, float] = field(default_factory=dict)
     pumping_speed: float = 0.0
@@ -270,6 +336,7 @@ class GlobalModel:
     wall_reactions: Sequence[WallReaction] = ()
     ion_wall_products: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
     gas_temperature: float | GasTemperature = 0.025
+    thermalize_electrons: bool = False
 
     def __post_init__(self) -> None:
         """Check that every name refers to a species and index the unknowns."""
@@ -314,21 +381,27 @@ class GlobalModel:
     def _densities(self, state: np.ndarray) -> dict[str, float]:
         densities = dict(self.fixed)
         for k, name in enumerate(self._unknown):
-            densities[name] = float(np.exp(state[k]))
+            densities[name] = float(np.exp(np.clip(state[k], -600.0, 600.0)))
         densities["e"] = sum(s.charge * densities[s.name] for s in self._charged)
         return densities
 
     def _temperatures(self, state: np.ndarray) -> tuple[float, float]:
         n = len(self._unknown)
-        te = float(np.exp(state[n]))
+        te = float(np.exp(np.clip(state[n], -100.0, 100.0)))
         if self._gas_balance:
-            tg = float(np.exp(state[n + 1]))
+            tg = float(np.exp(np.clip(state[n + 1], -100.0, 100.0)))
         else:
             tg = float(self.gas_temperature)  # type: ignore[arg-type]
+        if self.thermalize_electrons:
+            te = max(te, tg)
         return te, tg
 
-    def _terms(self, state: np.ndarray) -> dict[str, Any]:
-        """Every term of the balances at ``state``."""
+    def _absorbed(self, t: float) -> float:
+        """The absorbed power in W at the time ``t``."""
+        return float(self.power(t)) if callable(self.power) else float(self.power)
+
+    def _terms(self, state: np.ndarray, t: float = 0.0) -> dict[str, Any]:
+        """Every term of the balances at ``state`` and the time ``t``."""
         chamber = self.chamber
         volume = chamber.volume
         n = self._densities(state)
@@ -336,7 +409,7 @@ class GlobalModel:
         ne = max(n["e"], 1.0)  # quasi-neutral; guarded against a negative excess
         change = dict.fromkeys(n, 0.0)
         gross = dict.fromkeys(n, 0.0)  # every gain and loss, to judge a residual
-        power: dict[str, float] = {"absorbed": self.power}
+        power: dict[str, float] = {"absorbed": self._absorbed(t)}
         gas_heating = 0.0
 
         rates = {}
@@ -353,10 +426,12 @@ class GlobalModel:
                 power[reaction.name] = power.get(reaction.name, 0.0) - loss
             gas_heating += reaction.gas_gain(te, tg) * rate * E
 
+        source_rates = []
         for source in self.sources:
-            rate = source.rate
+            rate = source.coefficient(te, tg)
             for name in source.per:
                 rate *= n[name]
+            source_rates.append(rate)
             for name, count in source.changes.items():
                 change[name] += count * rate
                 gross[name] += abs(count) * rate
@@ -405,11 +480,10 @@ class GlobalModel:
         # floating walls: the electrons leave as fast as the positive charge does,
         # and as fast as the sources add net negative charge
         net_charge_source = sum(
-            -self._by_name[name].charge * count * source.rate
-            * np.prod([n[p] for p in source.per])
-            for source in self.sources
+            -self._by_name[name].charge * count * rate
+            for source, rate in zip(self.sources, source_rates, strict=True)
             for name, count in source.changes.items()
-        )  # fmt: skip
+        )
         electron_wall = (
             sum(ion.charge * walls[ion.name] for ion in self._charged if ion.charge > 0)
             + net_charge_source
@@ -451,12 +525,19 @@ class GlobalModel:
             )
         return terms
 
-    def _derivative(self, state: np.ndarray) -> np.ndarray:
+    def _derivative(self, state: np.ndarray, t: float = 0.0) -> np.ndarray:
         """``d state / dt``: the balances in the logarithms of the unknowns."""
-        terms = self._terms(state)
+        terms = self._terms(state, t)
         n, change = terms["densities"], terms["change"]
         rates = [change[name] / n[name] for name in self._unknown]
-        rates.append(terms["dte"] / terms["te"])
+        dlog_te = terms["dte"] / terms["te"]
+        if self.thermalize_electrons:
+            # at the floor T_e cannot fall; below it (the state is a log) it is pulled up
+            floor = np.log(terms["tg"])
+            n = len(self._unknown)
+            if state[n] <= floor:
+                dlog_te = max(dlog_te, 0.0) + (floor - state[n]) / 1.0e-8
+        rates.append(dlog_te)
         if self._gas_balance:
             rates.append(terms["dtg"] / terms["tg"])
         return np.array(rates)
@@ -492,9 +573,11 @@ class GlobalModel:
             state.append(np.log(values.get("Tg", gas_model.wall_temperature)))
         return np.array(state)
 
-    def evaluate(self, state: np.ndarray, converged: bool = True) -> GlobalState:
-        """Return the :class:`GlobalState` of a state vector, with every term."""
-        terms = self._terms(state)
+    def evaluate(
+        self, state: np.ndarray, converged: bool = True, t: float = 0.0
+    ) -> GlobalState:
+        """Return the :class:`GlobalState` of a state vector at ``t``, with every term."""
+        terms = self._terms(state, t)
         power = {k: float(v) for k, v in terms["power"].items()}
         balance = {name: float(terms["change"][name]) for name in terms["densities"]}
         result = GlobalState(
@@ -558,6 +641,49 @@ class GlobalModel:
         residual = float(np.max(np.abs(self._derivative(state))))
         converged = bool(residual < tolerance * self._scale(state))
         return self.evaluate(state, converged=converged)
+
+    def evolve(
+        self,
+        times: Sequence[float],
+        initial: Mapping[str, float] | GlobalState | None = None,
+        *,
+        breakpoints: Sequence[float] = (),
+    ) -> list[GlobalState]:
+        """The states at ``times`` (s) of the balances integrated in time.
+
+        The integration starts at ``times[0]`` from ``initial`` (see
+        :meth:`steady_state`) with an implicit method, driven by ``power(t)`` if
+        that is a function. Stop at every ``breakpoints`` time inside the
+        interval, where the drive jumps (the edges of a pulse), so the step
+        size does not have to find them.
+        """
+        times = np.asarray(times, dtype=float)
+        if times.ndim != 1 or len(times) < 2 or np.any(np.diff(times) <= 0.0):
+            raise ValueError("times must be a strictly increasing 1D sequence")
+        edges = sorted({float(b) for b in breakpoints if times[0] < b < times[-1]})
+        edges = [float(times[0]), *edges, float(times[-1])]
+        y = self._state(initial)
+        states = [self.evaluate(y, t=float(times[0]))]
+        for lo, hi in zip(edges[:-1], edges[1:], strict=True):
+            inside = times[(times > lo) & (times <= hi)]
+            if len(inside) == 0 or inside[-1] < hi:
+                inside = np.append(inside, hi)
+            run = solve_ivp(
+                lambda t, y: self._derivative(y, t),
+                (lo, hi),
+                y,
+                method="BDF",
+                t_eval=inside,
+                rtol=1.0e-6,
+                atol=1.0e-9,
+            )
+            if not run.success:
+                raise RuntimeError(f"the time integration failed: {run.message}")
+            for t, column in zip(run.t, run.y.T, strict=True):
+                if t in times:
+                    states.append(self.evaluate(column, t=float(t)))
+            y = run.y[:, -1]
+        return states
 
     def _scale(self, state: np.ndarray) -> float:
         """The fastest relative gain or loss (1/s) of any unknown, to judge a residual."""

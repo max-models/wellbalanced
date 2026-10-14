@@ -64,7 +64,10 @@ def test_a_source_that_follows_the_electron_temperature_moves_the_balance() -> N
         power=50.0,
         sources=[
             VolumeSource(
-                {"Ar+": 1, "e": 1}, lambda te, tg: 1.0e4 * te, per=("Ar+",), name="boost"
+                {"Ar+": 1, "e": 1},
+                lambda te, tg: 1.0e4 * te,
+                per=("Ar+",),
+                name="boost",
             )
         ],
     )

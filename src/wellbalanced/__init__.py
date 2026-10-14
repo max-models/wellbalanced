@@ -13,6 +13,12 @@ boundaries that can be changed between steps.
 """
 
 from wellbalanced.datasets import stack
+from wellbalanced.driftfluid2d import (
+    DriftFluid2D,
+    DriftFluid2DState,
+    SpokeReport,
+    spoke_report,
+)
 from wellbalanced.fluid1d import (
     Boundary,
     Fluid1D,
@@ -29,6 +35,7 @@ from wellbalanced.global_model import (
     VolumeSource,
     WallReaction,
 )
+from wellbalanced.magnetron import MATERIALS, Magnetron, TargetMaterial
 from wellbalanced.reactions import Reaction
 from wellbalanced.species import ELECTRON, Species
 
@@ -39,16 +46,23 @@ __all__ = [
     "Boundary",
     "Chamber",
     "Cusp",
+    "DriftFluid2D",
+    "DriftFluid2DState",
     "Fluid1D",
     "FluidSpecies",
     "FluidState",
     "GasTemperature",
     "GlobalModel",
     "GlobalState",
+    "MATERIALS",
+    "Magnetron",
     "PotentialBoundary",
     "Reaction",
     "Species",
+    "SpokeReport",
+    "TargetMaterial",
     "VolumeSource",
     "WallReaction",
+    "spoke_report",
     "stack",
 ]

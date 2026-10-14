@@ -27,6 +27,16 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   Scharfetter-Gummel fluxes, the electron energy equation and Poisson's equation, fully
   implicit. Walls, prescribed densities or fluxes at either end, changeable between
   steps, as the fluid side of a coupling to a particle code.
+- **2D axial-azimuthal drift fluid of a magnetron** (`DriftFluid2D`): magnetised electrons
+  with the Hall tensor, inertial ions, neutral depletion and refill, the electron energy
+  and a semi-implicit Poisson solve; the gradient-drift instability and spoke diagnostics
+  (mode number, phase velocity against E x B, cathode modulation, potential hump).
+- **A global model of the magnetron ionization region** (`Magnetron`,
+  `wellbalanced.magnetron`): Ar and the sputtered metal, Bohm losses through the target
+  with sputtering and self-sputtering, argon refill and sputter wind, driven by the
+  discharge current and voltage of a pulse or of dc; it reports the argon rarefaction,
+  the metal to argon ratio, the metal share of the ion flux and the self-sputtering
+  share against the current. Yields and geometry are placeholders, not data.
 - **A beam-driven plasma neutralizer** (`wellbalanced.neutralizer`): a fast beam's
   charge states on the gas and on the plasma it makes, coupled to a global model of the
   channel fed by the beam's stripped and secondary electrons, iterated to a fixed point

@@ -37,7 +37,9 @@ for name in ("Ti", "Cr", "Mo"):
     # the heating fraction is fitted to a 2 A point, the others are predictions
     magnetron = magnetron.calibrate_heating(2.0, voltage(2.0))
     scans.append(magnetron.current_scan(currents, voltage))
-dc = xr.concat(scans, dim="material", join="outer").assign_coords(material=["Ti", "Cr", "Mo"])
+dc = xr.concat(scans, dim="material", join="outer").assign_coords(
+    material=["Ti", "Cr", "Mo"]
+)
 
 diagnostics = (
     ("rarefaction", False),

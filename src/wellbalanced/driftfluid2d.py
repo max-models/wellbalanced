@@ -302,7 +302,7 @@ def spoke_report(run: Run, window: tuple[float, float] | None = None) -> SpokeRe
     phi = run.series["potential"][select]
     hump = float(np.mean(phi.max(axis=1) - phi.mean(axis=1)))
     e_y = float(np.mean(np.abs(run.series["e_y"][select]).max(axis=1)))
-    direction = int(np.sign(fit.phase_velocity) * np.sign(v_exb)) if v_exb else 0
+    direction = int(np.sign(fit.phase_speed) * np.sign(v_exb)) if v_exb else 0
     return SpokeReport(
         mode,
         run.length_y / mode,
@@ -834,7 +834,8 @@ class DriftFluid2D:
         fields = self._fields(phi)
         gam_x, gam_y, _ = self._electron_like_flux(ne, te, fields, gas, lagged=prev)
         gam_x[0] = -self.secondary_emission * gam_ix[0]
-        gam_x[-1] = self._anode_flux(ne, te, gas, fields[0][-1], fields[1][-1])
+        # explicit in the field, as in the Poisson solve, so the discrete charge balance is exact
+        gam_x[-1] = self._anode_flux(ne, te, gas, prev[0][-1], prev[1][-1])
         ecx, ecy = fields[4], fields[5]
         rate = self.ionization_rate(te) * gas * ne
         div_e = (self._divx @ gam_x.ravel() + self._divy @ gam_y.ravel()).reshape(ne.shape)

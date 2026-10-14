@@ -713,18 +713,26 @@ class Magnetron:
             state = self.steady_state(current, v, previous)
             states.append(state)
             previous = state
-        data = stack(states, "current", currents, long_name="discharge current", units="A")
+        data = stack(
+            states, "current", currents, long_name="discharge current", units="A"
+        )
         columns = [self.diagnostics(state) for state in states]
         for key, long_name, units in (
             ("rarefaction", "argon density over the filling density", ""),
             ("metal_to_argon", "neutral metal over argon density", ""),
             ("metal_ion_fraction", "metal fraction of the ion flux", ""),
-            ("self_sputtering_share", "self-sputtering share of the sputtered flux", ""),
+            (
+                "self_sputtering_share",
+                "self-sputtering share of the sputtered flux",
+                "",
+            ),
             ("electron_density", "electron density", "m^-3"),
             ("discharge_current", "discharge current of the model", "A"),
         ):
             data[key] = variable("current", [c[key] for c in columns], long_name, units)
-        data["converged"] = variable("current", [s.converged for s in states], "converged")
+        data["converged"] = variable(
+            "current", [s.converged for s in states], "converged"
+        )
         return data
 
     def scan(
@@ -754,4 +762,3 @@ def pulse(
         return on if (t % period) < on_time else off
 
     return waveform
-

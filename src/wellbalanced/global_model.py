@@ -381,15 +381,15 @@ class GlobalModel:
     def _densities(self, state: np.ndarray) -> dict[str, float]:
         densities = dict(self.fixed)
         for k, name in enumerate(self._unknown):
-            densities[name] = float(np.exp(state[k]))
+            densities[name] = float(np.exp(np.clip(state[k], -600.0, 600.0)))
         densities["e"] = sum(s.charge * densities[s.name] for s in self._charged)
         return densities
 
     def _temperatures(self, state: np.ndarray) -> tuple[float, float]:
         n = len(self._unknown)
-        te = float(np.exp(state[n]))
+        te = float(np.exp(np.clip(state[n], -100.0, 100.0)))
         if self._gas_balance:
-            tg = float(np.exp(state[n + 1]))
+            tg = float(np.exp(np.clip(state[n + 1], -100.0, 100.0)))
         else:
             tg = float(self.gas_temperature)  # type: ignore[arg-type]
         if self.thermalize_electrons:
@@ -481,7 +481,7 @@ class GlobalModel:
         # and as fast as the sources add net negative charge
         net_charge_source = sum(
             -self._by_name[name].charge * count * rate
-            for source, rate in zip(self.sources, source_rates)
+            for source, rate in zip(self.sources, source_rates, strict=True)
             for name, count in source.changes.items()
         )
         electron_wall = (
@@ -664,7 +664,7 @@ class GlobalModel:
         edges = [float(times[0]), *edges, float(times[-1])]
         y = self._state(initial)
         states = [self.evaluate(y, t=float(times[0]))]
-        for lo, hi in zip(edges[:-1], edges[1:]):
+        for lo, hi in zip(edges[:-1], edges[1:], strict=True):
             inside = times[(times > lo) & (times <= hi)]
             if len(inside) == 0 or inside[-1] < hi:
                 inside = np.append(inside, hi)
@@ -679,7 +679,7 @@ class GlobalModel:
             )
             if not run.success:
                 raise RuntimeError(f"the time integration failed: {run.message}")
-            for t, column in zip(run.t, run.y.T):
+            for t, column in zip(run.t, run.y.T, strict=True):
                 if t in times:
                     states.append(self.evaluate(column, t=float(t)))
             y = run.y[:, -1]

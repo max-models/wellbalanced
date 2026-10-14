@@ -69,4 +69,20 @@ Boundaries are set per species and end, and can be changed between steps:
 `model.set_boundary("left", "e", Boundary.flux(1e16))`. Resolve the Debye length with the
 cells: with an unresolved sheath Newton's method cannot take long implicit steps.
 
+## A neutralizer
+
+A fast beam's charge states on the gas and on the plasma it makes, with that plasma as a
+global model of the channel:
+
+```python
+from wellbalanced.neutralizer import illustrative_deuterium_neutralizer
+
+model = illustrative_deuterium_neutralizer()  # placeholder numbers: it warns
+result = model.solve()
+print(result.neutral_fraction, result.plasma.ionization_degree(["D2", "D"]))
+```
+
+Real data go into a `Neutralizer` with a `BeamData` (the beam's cross sections on the gas
+and the plasma) and the plasma's species and reactions.
+
 See the [API reference](/wellbalanced/api/wellbalanced/) for every class and function.

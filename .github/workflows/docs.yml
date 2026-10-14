@@ -32,8 +32,10 @@ jobs:
         full-examples/index.html
         full-examples/argon-global-model/index.html
         full-examples/argon-discharge-1d/index.html
+        full-examples/neutralizer-scan/index.html
         api/wellbalanced/index.html
         api/wellbalanced/global_model/index.html
         api/wellbalanced/fluid1d/index.html
+        api/wellbalanced/neutralizer/index.html
         tutorials/global-model/global_model.ipynb
         full-examples/argon-global-model/plot-1.png

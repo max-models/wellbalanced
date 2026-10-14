@@ -16,7 +16,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   between steps.
 - `Species` and `Reaction`, with rates from plasmacoll cross sections, rate tables,
   constants or functions.
-- Examples (an argon global model, a 1D argon discharge) and a tutorial.
+- `wellbalanced.neutralizer`: a beam-driven plasma neutralizer; the beam's charge
+  states from plasmacoll on gas and plasma targets, its sources (stripped electrons,
+  captures, gas ionization) for a global model of the channel, gas flow at the gas
+  temperature, a fixed point; illustrative deuterium placeholders that warn.
+- Examples (an argon global model, a 1D argon discharge, a neutralizer scan) and a tutorial.
 
 ### Removed
 

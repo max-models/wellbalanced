@@ -27,6 +27,10 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   Scharfetter-Gummel fluxes, the electron energy equation and Poisson's equation, fully
   implicit. Walls, prescribed densities or fluxes at either end, changeable between
   steps, as the fluid side of a coupling to a particle code.
+- **A beam-driven plasma neutralizer** (`wellbalanced.neutralizer`): a fast beam's
+  charge states on the gas and on the plasma it makes, coupled to a global model of the
+  channel fed by the beam's stripped and secondary electrons, iterated to a fixed point
+  in seconds.
 - **The data of the kinetic codes**: rates come from
   [plasmacoll](https://github.com/max-models/plasmacoll)'s cross sections averaged over a
   Maxwellian, the data its Monte Carlo collisions use, so a fluid and a kinetic model of

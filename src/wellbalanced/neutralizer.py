@@ -294,7 +294,7 @@ class Neutralizer:
         sources = []
         for target, table in self.data.transitions.cross_sections.items():
             for (start, end), sigma in table.items():
-                share = mean[states.index(start)]
+                share = float(mean[states.index(start)])
                 if sigma <= 0.0 or share <= 0.0:
                     continue
                 freed = STATE_CHARGES[end] - STATE_CHARGES[start]
@@ -330,7 +330,7 @@ class Neutralizer:
                         )
                     )
         for state, sigma in self.data.gas_ionization.items():
-            share = mean[states.index(state)]
+            share = float(mean[states.index(state)])
             if sigma <= 0.0 or share <= 0.0:
                 continue
             for gas, weight, ion in gases:

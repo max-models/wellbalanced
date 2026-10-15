@@ -595,12 +595,13 @@ class Magnetron:
         gas_ion, metal_ion = s["gas_ion"].name, s["metal_ion"].name
         from_argon = m.argon_yield * currents[f"I_{gas_ion}"]
         from_metal = m.self_yield * currents[f"I_{metal_ion}"]
+        sputtered = from_argon + from_metal
         density = state.densities
         return {
             "rarefaction": density[s["gas"].name] / self.gas_density,
             "metal_to_argon": density[s["metal"].name] / density[s["gas"].name],
             "metal_ion_fraction": currents["metal_ion_fraction"],
-            "self_sputtering_share": from_metal / (from_argon + from_metal),
+            "self_sputtering_share": from_metal / sputtered if sputtered > 0.0 else 0.0,
             "electron_density": density["e"],
             "electron_temperature": state.electron_temperature,
             "discharge_current": currents["I_D"],

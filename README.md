@@ -29,6 +29,13 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   with the Hall tensor, inertial ions, neutral depletion and refill, the electron energy
   and a semi-implicit Poisson solve; the gradient-drift instability and spoke diagnostics
   (mode number, phase velocity against E x B, cathode modulation, potential hump).
+- **The neutral gas of a magnetron** (`GasDynamics`,
+  `wellbalanced.gasdynamics`): argon and the sputtered metal as one
+  compressible gas in 1D or 2D (HLLC, species diffusion, heat conduction),
+  with the sputter wind, the return of neutralized ions, ionization sinks,
+  wall heat exchange and a refill reservoir as inputs a plasma model can
+  update; the rarefaction that spokes depend on. The continuum limit, so
+  Knudsen numbers near 1 need a kinetic check.
 - **A beam-driven plasma neutralizer** (`wellbalanced.neutralizer`): a
   fast beam’s charge states on the gas and on the plasma it makes,
   coupled to a global model of the channel fed by the beam’s stripped

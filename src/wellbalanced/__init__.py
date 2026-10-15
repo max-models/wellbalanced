@@ -10,6 +10,10 @@ kinetic model of the same plasma differ in their physics, not their data.
 :class:`Fluid1D` resolves the same plasma along one dimension: drift-diffusion of
 every species, the electron energy and Poisson's equation, implicit, with
 boundaries that can be changed between steps.
+
+:class:`GasDynamics` is the neutral gas of a sputtering magnetron, argon and the sputtered
+metal as one compressible gas in one or two dimensions (its boundaries and sources are in
+:mod:`wellbalanced.gasdynamics`).
 """
 
 from wellbalanced.datasets import stack
@@ -26,6 +30,7 @@ from wellbalanced.fluid1d import (
     FluidState,
     PotentialBoundary,
 )
+from wellbalanced.gasdynamics import GasDynamics, GasState
 from wellbalanced.global_model import (
     Chamber,
     Cusp,
@@ -51,6 +56,8 @@ __all__ = [
     "Fluid1D",
     "FluidSpecies",
     "FluidState",
+    "GasDynamics",
+    "GasState",
     "GasTemperature",
     "GlobalModel",
     "GlobalState",

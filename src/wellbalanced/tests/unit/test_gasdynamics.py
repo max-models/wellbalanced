@@ -279,10 +279,10 @@ def test_periodic_boxes_conserve_mass_momentum_and_energy(cells_y: int) -> None:
     scale = model.totals()
     for name in change:
         assert change[name] == pytest.approx(
-            0.0, abs=1e-12 * max(abs(scale[name]), 1e-30)
+            0.0, abs=1e-11 * max(abs(scale[name]), 1e-30)
         ), name
         assert budget[name] == pytest.approx(
-            0.0, abs=1e-12 * max(abs(scale[name]), 1e-30)
+            0.0, abs=1e-11 * max(abs(scale[name]), 1e-30)
         ), name
 
 

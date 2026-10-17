@@ -96,6 +96,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import scipy.sparse as sp
@@ -607,12 +608,12 @@ class LinearModes:
     @property
     def growth_rates(self) -> np.ndarray:
         """``gamma`` of every eigenvalue (1/s)."""
-        return self.eigenvalues.real
+        return np.real(self.eigenvalues)
 
     @property
     def frequencies(self) -> np.ndarray:
         """``omega = -Im s`` of every eigenvalue (rad/s)."""
-        return -self.eigenvalues.imag
+        return -np.imag(self.eigenvalues)
 
     @property
     def phase_speeds(self) -> np.ndarray:
@@ -696,15 +697,15 @@ class DriftFluid2D:
     nx: int
     ny: int
     voltage: float = 260.0
-    magnetic_field: Callable[[np.ndarray], np.ndarray] | float = 0.0
+    magnetic_field: Callable[[Any], Any] | float = 0.0
     gas_density: float = 1.45e20
     electron_temperature: float | None = 5.0
-    momentum_rate: float | Callable[[np.ndarray], np.ndarray] = argon_momentum_rate
+    momentum_rate: float | Callable[[Any], Any] = argon_momentum_rate
     ion_friction_rate: float = 1.0e-15
     ion_mass_u: float = 39.948
     ion_temperature: float = 0.025
-    ionization_rate: Callable[[np.ndarray], np.ndarray] = argon_ionization_rate
-    excitation_rate: Callable[[np.ndarray], np.ndarray] | None = argon_excitation_rate
+    ionization_rate: Callable[[Any], Any] = argon_ionization_rate
+    excitation_rate: Callable[[Any], Any] | None = argon_excitation_rate
     ionization_energy_ev: float = 15.76
     excitation_energy_ev: float = 11.56
     secondary_emission: float = 0.06
@@ -718,8 +719,8 @@ class DriftFluid2D:
     diamagnetic: float = 1.0
     anode_thermal_flux: bool = False
     floor_added: dict = field(default_factory=lambda: {"ne": 0.0, "ni": 0.0, "N": 0.0})
-    _rate_override: object = field(default=None, repr=False)
-    _lu: object = field(default=None, repr=False)
+    _rate_override: np.ndarray | None = field(default=None, repr=False)
+    _lu: spla.SuperLU | None = field(default=None, repr=False)
     bohm: float = 0.0
     external_sources: dict[str, np.ndarray] = field(default_factory=dict)
 
@@ -739,8 +740,10 @@ class DriftFluid2D:
         if not callable(bfun):
             value = float(bfun)
 
-            def bfun(x):
+            def uniform_field(x):
                 return np.full_like(np.asarray(x, dtype=float), value)
+
+            bfun = uniform_field
 
         self._bc = np.asarray(bfun(self.x), dtype=float)
         self._bf = np.asarray(bfun(self.xf), dtype=float)
@@ -913,6 +916,7 @@ class DriftFluid2D:
     def _affine(self) -> tuple[np.ndarray, np.ndarray]:
         """Constant parts of the face gradients of the potential from the boundary values."""
         if self.periodic_x:
+            assert self.field_bc is not None
             bx = np.full(self.nx + 1, -self.field_bc)
             bc = np.full(self.nx, -self.field_bc)
             return np.repeat(bx, self.ny), np.repeat(bc, self.ny)
@@ -1181,8 +1185,9 @@ class DriftFluid2D:
                 if np.linalg.norm(residual) <= 1e-12 * scale:
                     return x
                 x = x + self._lu.solve(residual)
-        self._lu = spla.splu(matrix, permc_spec="COLAMD")
-        return self._lu.solve(rhs)
+        lu = spla.splu(matrix, permc_spec="COLAMD")
+        self._lu = lu
+        return lu.solve(rhs)
 
     def _anode_flux(self, ne, te, gas, ex, ey):
         """Electron flux out through the anode face: the drift of the adjacent cell, outflow only.
@@ -1360,7 +1365,7 @@ class DriftFluid2D:
                 saved
             )
         values, vectors = np.linalg.eig(matrix)
-        order = np.argsort(-values.real)
+        order = np.argsort(-np.real(values))
         profiles = {
             name: vectors[row * nx : (row + 1) * nx][:, order]
             for row, name in enumerate(keys)
@@ -1529,7 +1534,7 @@ class DriftFluid2D:
         next_record = state.time
         t_stop = state.time + t_end
         steps = 0
-        step_size = dt
+        step_size = dt if dt is not None else self.suggest_timestep(state, cfl)
         while state.time < t_stop - 1e-15 * t_end:
             if state.time >= next_record - 1e-12 * record_every:
                 record(state)

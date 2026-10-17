@@ -536,7 +536,7 @@ class Magnetron:
                 "no heating fraction up to 10 reproduces the current: "
                 "check the yields and the geometry"
             )
-        fraction = brentq(mismatch, lo, hi, xtol=1.0e-6)
+        fraction, _ = brentq(mismatch, lo, hi, xtol=1.0e-6, full_output=True)
         return dataclasses.replace(self, heating_fraction=float(fraction))
 
     # -- the target -------------------------------------------------------------------

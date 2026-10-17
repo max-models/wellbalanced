@@ -1025,11 +1025,13 @@ class GasDynamics:
         if self.diffusion is None and not has_heat:
             return rate
         left, right = self.boundaries["left"], self.boundaries["right"]
+        x_ends: tuple[str, str]
         if left.kind == "periodic":
             x_ends = ("periodic", "periodic")
         else:
-            x_ends = tuple(  # type: ignore[assignment]
-                "dirichlet" if b.kind == "inflow" else "flux" for b in (left, right)
+            x_ends = (
+                "dirichlet" if left.kind == "inflow" else "flux",
+                "dirichlet" if right.kind == "inflow" else "flux",
             )
         k, gamma = BOLTZMANN, self.gamma
         axes = range(2 if self.ny > 1 else 1)

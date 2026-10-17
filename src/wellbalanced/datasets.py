@@ -33,7 +33,7 @@ def variable(dims, values, long_name: str, units: str = "") -> xr.Variable:
 def stack(
     results: Sequence[_HasDataset],
     dim: str,
-    values: Sequence[Any],
+    values: Sequence[Any] | np.ndarray,
     *,
     long_name: str | None = None,
     units: str = "",

@@ -644,7 +644,7 @@ class GlobalModel:
 
     def evolve(
         self,
-        times: Sequence[float],
+        times: Sequence[float] | np.ndarray,
         initial: Mapping[str, float] | GlobalState | None = None,
         *,
         breakpoints: Sequence[float] = (),

@@ -22,9 +22,18 @@ al. 2019 and Boeuf 2022/2023). Species:
 - **neutral gas** ``N``, depleted by ionization and refilled at the rate
   ``refill_rate`` (the gas flow and the sputter wind), the slow variable of an
   ionization wave;
-- the **electron energy** ``w = 3/2 n T_e`` with Joule heating, elastic and
-  inelastic losses and the enthalpy flux of Hagelaar and Pitchford (2005), or a
-  fixed ``T_e``.
+- the **electron energy** ``w = 3/2 n T_e`` with Joule heating, the enthalpy flux of
+  Hagelaar and Pitchford (2005) and three loss channels (elastic, ionization,
+  excitation), or a fixed ``T_e``.
+
+Closures (what the 1D runaway diagnosis changed; see the changelog): the electron
+momentum-transfer rate is a function of ``T_e`` (not a constant), excitation is an explicit
+loss channel (replacing a lumped 30 eV per ionization), the fitted rates are held at their
+end values outside ``0.5 .. 100 eV`` so no rate grows with a runaway ``T_e``, the local
+energy loss is treated implicitly (the explicit update is stiff: the heating of a
+weakly magnetised, high-field cell is 1e11 eV/s per electron), and the cathode emits a
+*prescribed net electron current* ``cathode_current_density`` as in Boeuf's PIC (a fixed
+``gamma`` is an avalanche whenever ``gamma M >= 1``, with ``M`` about 170 here).
 
 Formulation: **full Poisson, semi-implicit**, not quasi-neutral. The cathode
 sheath and the plasma-wall boundaries are then part of the solution and no
@@ -42,22 +51,42 @@ SSP Runge-Kutta 3 scheme (each stage an implicit-permittivity Euler step).
 Discretisation: finite volumes on cells; the E x B advection of the electrons uses
 third-order upwind-biased face values (a first-order upwind scheme has a numerical
 diffusion ``v dy / 2`` that damps the spoke wavelengths); the ions use first-order
-upwind (positive, monotone). Electron boundaries: the cathode emits
-``gamma`` electrons per incident ion, the anode absorbs (outflow only); ions leave
-freely (outflow only). The potential is ``-voltage`` at the cathode and 0 at the
+upwind (positive, monotone). Electron boundaries: the cathode emits a prescribed net
+current (``cathode_current_density``) or ``gamma`` electrons per incident ion, the anode
+absorbs (outflow only); ions leave freely (outflow only). The potential is ``-voltage`` at the cathode and 0 at the
 anode.
 
-Analytic reference: :func:`gradient_drift_roots` is the local (WKB, ``k_x = 0``)
-dispersion relation of the gradient-drift (Simon-Hoh) instability of this system;
-the tests compare the growth rate and phase speed with it.
+Verification (``tests/unit/test_driftfluid2d.py``): a y-uniform state stays uniform to
+round-off; a passive blob drifts at ``E/B`` to 3e-6; one Euler stage satisfies the
+discrete Poisson equation exactly; ``stationary_sources`` hold an equilibrium; every term
+of the discrete operator matches its analytic form to under 1 % (electron Hall flux with
+a density gradient, ion continuity and momentum); and in a uniform plasma periodic in
+``x`` (``periodic_x``, ``field_bc``) the time-domain growth rate and phase speed of an
+``x``-uniform mode agree with :func:`uniform_plasma_roots`, the full-Poisson local
+dispersion relation, to under 4 % (0.5 % in the eigenvalues of the semi-discrete operator, at
+32 cells per wavelength, converging with resolution). What is not verified: the
+gradient-drift growth rate in a bounded box. The local WKB relation
+:func:`gradient_drift_roots` assumes a mode uniform along ``x``, which electrodes forbid:
+the eigenmodes of a box are waves along ``x`` with their own rates, several times
+different from the local ones (the quasi-neutral form is also far off, because the
+E x B-driven branch sits on a near cancellation that the few-percent Debye correction moves).
 
-PLACEHOLDERS, to be checked against the sources before any physical claim: the
-argon ionization rate :func:`argon_ionization_rate` (a fit quoted from memory of
-Lieberman and Lichtenberg, *Principles of Plasma Discharges and Materials
-Processing*; replace with a rate from plasmacoll's cross sections), the electron
-momentum-transfer rate coefficient (the value that reproduces the ``nu_en = 2e7 /s``
-that Boeuf quotes at 0.6 Pa; in reality it depends on the electron energy), the ion
-friction, ``inelastic_loss_ev`` and the secondary emission yield.
+Linear stability: :meth:`DriftFluid2D.linear_modes` builds the Jacobian of the discretised operator
+about a y-uniform state for one azimuthal mode, x-resolved, so the electrodes, the gradients, the Hall
+tensor and the energy equation are in it, and returns its eigenvalues and eigenvectors. Its leading
+eigenvalue is meant to agree with :func:`uniform_plasma_roots` for a uniform plasma and with a
+time-domain run fitted in its exponential-growth window (tests in ``test_driftfluid2d.py``); the same
+comparison on Boeuf's 1D state is the job of the gallery study 03, which has not been run.
+
+Analytic reference: :func:`uniform_plasma_roots` and :func:`gradient_drift_roots` are the
+local dispersion relations of this system (without and with a density gradient).
+
+PLACEHOLDERS, to be checked against the sources before any physical claim: the three
+argon rate fits (ionization, excitation, momentum transfer: quoted from memory of
+Lieberman and Lichtenberg, *Principles of Plasma Discharges and Materials Processing*;
+the momentum rate gives 1.3e-13 m^3/s at 3 eV, close to the ``nu_en = 2e7 /s`` that Boeuf
+quotes at 0.6 Pa; replace all three with rates from plasmacoll's cross sections), the
+ion friction, the single lumped excitation level (11.56 eV) and ``secondary_emission``.
 
 Not yet: electron inertia, an electron-ion or ion-ion collision operator, sputtered
 metal (no HiPIMS), the curvature of the race track, a gas temperature equation.
@@ -67,6 +96,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import scipy.sparse as sp
@@ -79,15 +109,19 @@ from wellbalanced.datasets import variable
 __all__ = [
     "DriftFluid2D",
     "DriftFluid2DState",
+    "LinearModes",
     "ModeFit",
     "Run",
     "SpokeReport",
+    "argon_excitation_rate",
     "argon_ionization_rate",
+    "argon_momentum_rate",
     "exponential_field",
     "fit_mode",
     "gradient_drift_roots",
     "mode_amplitudes",
     "spoke_report",
+    "uniform_plasma_roots",
 ]
 
 E = ELEMENTARY_CHARGE
@@ -98,15 +132,45 @@ TE_FLOOR = 0.1
 TE_CEIL = 200.0
 
 
+#: Electron temperatures (eV) between which the fitted rates are evaluated; outside they
+#: are held at the end values, so no rate can run away with a runaway ``T_e``.
+RATE_TE_RANGE = (0.5, 100.0)
+
+
+def _bounded(te: np.ndarray | float) -> np.ndarray | float:
+    return np.clip(te, *RATE_TE_RANGE)
+
+
 def argon_ionization_rate(te: np.ndarray | float) -> np.ndarray | float:
     """Ionization rate coefficient of argon at a Maxwellian ``T_e`` (eV), m^3/s.
 
     PLACEHOLDER: ``2.34e-14 T_e^0.59 exp(-17.44 / T_e)``, the fit as remembered from
     Lieberman and Lichtenberg's textbook; check it against the plasmacoll cross
-    section before use.
+    section before use. ``T_e`` is bounded to :data:`RATE_TE_RANGE`.
     """
-    te = np.maximum(te, 0.1)
+    te = _bounded(te)
     return 2.34e-14 * te**0.59 * np.exp(-17.44 / te)
+
+
+def argon_excitation_rate(te: np.ndarray | float) -> np.ndarray | float:
+    """Excitation rate coefficient of argon (lumped, ``11.56 eV``), m^3/s.
+
+    PLACEHOLDER: ``2.48e-14 T_e^0.33 exp(-12.78 / T_e)``, as remembered from Lieberman
+    and Lichtenberg; check against plasmacoll.
+    """
+    te = _bounded(te)
+    return 2.48e-14 * te**0.33 * np.exp(-12.78 / te)
+
+
+def argon_momentum_rate(te: np.ndarray | float) -> np.ndarray | float:
+    """Electron-argon momentum-transfer rate coefficient at ``T_e`` (eV), m^3/s.
+
+    PLACEHOLDER: ``2.336e-14 T_e^1.609 exp(0.0618 ln(T_e)^2 - 0.1171 ln(T_e)^3)``, as
+    remembered from Lieberman and Lichtenberg; it gives 1.3e-13 m^3/s at 3 eV, close to the
+    ``nu_en = 2e7 /s`` at 0.6 Pa that Boeuf quotes (``k = 1.4e-13``).
+    """
+    log = np.log(_bounded(te))
+    return 2.336e-14 * np.exp(1.609 * log + 0.0618 * log**2 - 0.1171 * log**3)
 
 
 def exponential_field(b_max: float, scale: float) -> Callable[[np.ndarray], np.ndarray]:
@@ -360,6 +424,65 @@ def fit_mode(
     return ModeFit(mode, float(growth), float(omega), float(omega / k))
 
 
+def _plasma_parameters(
+    b_field: float, electron_collision_frequency: float, ion_collision_frequency: float
+):
+    """``(h, mu_perp)`` of the electrons from the field and the collision frequency."""
+    omega_ce = E * b_field / ELECTRON_MASS
+    nu = electron_collision_frequency
+    return omega_ce / nu, E * nu / (ELECTRON_MASS * (nu**2 + omega_ce**2))
+
+
+def uniform_plasma_roots(
+    kx: complex,
+    ky: float,
+    density: float,
+    e_field: float,
+    b_field: float,
+    electron_temperature: float,
+    ion_mass: float,
+    ion_collision_frequency: float,
+    electron_collision_frequency: float,
+) -> np.ndarray:
+    """Eigenvalues ``s`` of ``exp(i (k . r) + s t)`` for a uniform plasma, full Poisson.
+
+    Uniform ``n_0``, uniform ``E_0 = E_0 x`` and ``B_z``, constant ``T_e``, magnetised
+    inertialess electrons (the model's Hall tensor), cold ions with friction (steady
+    drift ``v_0i = e E_0 / (M nu_i)`` along ``x``) and Poisson's equation
+    ``eps0 k^2 delta phi = e n_0 (a_i - a_e)``, with ``delta n = n_0 a``:
+
+        s a_e = -(i k.v_0e + mu_perp k^2 T_e) a_e + mu_perp k^2 delta phi,
+        s a_i = -i k.v_0i a_i - i k.v,
+        s v   = -(nu_i + i k.v_0i) v - i (e / M) k delta phi,
+
+    where ``v_0e = -mu_perp E_0 (1, h)``. (The antisymmetric Hall part of the tensor drops
+    out of ``k . R k = k^2``.) Returns the three roots ``s``; ``Re s > 0`` grows and
+    ``omega = -Im s`` is the frequency for ``k_y > 0``. For ``k_x = 0`` and a large
+    density this tends to the quasi-neutral relation, whose roots near an
+    E x B-driven resonance are very sensitive to the few-percent Debye correction.
+    """
+    h, mu_perp = _plasma_parameters(
+        b_field, electron_collision_frequency, ion_collision_frequency
+    )
+    k = np.array([kx, ky], dtype=complex)
+    k2 = k @ k
+    v0e = -mu_perp * e_field * np.array([1.0, h])
+    v0i = np.array([E * e_field / (ion_mass * ion_collision_frequency), 0.0])
+    poisson = E * density / (EPSILON_0 * k2)
+    nu_i = ion_collision_frequency
+    matrix = np.zeros((4, 4), complex)  # (a_e, a_i, v_x, v_y)
+    matrix[0, 0] = -(1j * (k @ v0e) + mu_perp * k2 * electron_temperature)
+    matrix[0, 0] -= mu_perp * k2 * poisson
+    matrix[0, 1] = mu_perp * k2 * poisson
+    matrix[1, 1] = -1j * (k @ v0i)
+    matrix[1, 2], matrix[1, 3] = -1j * k[0], -1j * k[1]
+    for row, component in ((2, 0), (3, 1)):
+        matrix[row, row] = -(nu_i + 1j * (k @ v0i))
+        matrix[row, 0] = 1j * (E / ion_mass) * k[component] * poisson
+        matrix[row, 1] = -1j * (E / ion_mass) * k[component] * poisson
+    return np.linalg.eigvals(matrix)
+
+
 def gradient_drift_roots(
     k: float,
     gradient_length: float,
@@ -369,38 +492,53 @@ def gradient_drift_roots(
     ion_mass: float,
     ion_collision_frequency: float,
     electron_collision_frequency: float,
+    density: float | None = None,
 ) -> np.ndarray:
     """Roots ``omega`` of the local gradient-drift (Simon-Hoh) dispersion relation.
 
     The system of the module on an equilibrium ``n_0(x) = n_0 exp(-x / L)`` in a
     uniform ``E_0 = E_0 x`` and a uniform ``B_z = B``, perturbed by
     ``delta n = n_0(x) a exp(i (k y - omega t))`` with ``delta phi`` uniform in ``x``
-    (WKB, ``k_x = 0``, ``k L`` large), quasi-neutral, ``T_e`` constant, cold ions
-    with friction ``nu_i`` (so with the steady drift ``v_0i = e E_0 / (M nu_i)``). With
+    (WKB, ``k_x = 0``, ``k L`` large), ``T_e`` constant, cold ions with friction
+    ``nu_i`` (so with the steady drift ``v_0i = e E_0 / (M nu_i)``). With
     ``s = -i omega``, ``K = i k (mu_perp h / L + i k mu_perp)``, ``v_0e = -mu_perp (E_0 - T_e / L)``
     along ``x`` and ``h v_0e`` along ``y``:
 
-        s - v_0e/L + i k h v_0e - K T_e - K (M / (e k^2)) (s - v_0i / L)(s + nu_i) = 0.
+        s a_e = (v_0e / L - i k h v_0e) a_e + K (T_e a_e - delta phi),
+        s a_i = (v_0i / L) a_i - i k v,        s v = -nu_i v - i (e / M) k delta phi,
 
+    with ``eps0 k^2 delta phi = e n_0 (a_i - a_e)`` (Poisson) when ``density`` (``n_0``,
+    m^-3) is given, and ``a_e = a_i`` (quasi-neutral, two roots) when it is not.
     The electron part is the continuity equation with the Hall tensor (the E x B
-    advection ``i k h v_0e``, the density gradient and the diamagnetic term in
-    ``T_e``), the ion part the unmagnetised ion continuity and momentum. Valid
-    when the mode varies slowly along ``x`` on the scale ``L``; ``T_e`` in eV, ``E_0`` in V/m.
+    advection, the density gradient and the diamagnetic term in ``T_e``), the ion part
+    the unmagnetised ion continuity and momentum. Valid when the mode varies slowly
+    along ``x`` on the scale ``L``; ``T_e`` in eV, ``E_0`` in V/m.
 
     Returns:
-        The two complex roots ``omega``; ``Im omega > 0`` grows, ``Re omega / k`` is
+        The complex roots ``omega``; ``Im omega > 0`` grows, ``Re omega / k`` is
         the phase speed along ``+y``.
     """
-    omega_ce = E * b_field / ELECTRON_MASS
-    nu = electron_collision_frequency
-    h = omega_ce / nu
-    mu_perp = E * nu / (ELECTRON_MASS * (nu**2 + omega_ce**2))
+    h, mu_perp = _plasma_parameters(
+        b_field, electron_collision_frequency, ion_collision_frequency
+    )
     nu_i = ion_collision_frequency
     v0i = E * e_field / (ion_mass * nu_i)
     v0e = -mu_perp * (e_field - electron_temperature / gradient_length)
     big_k = 1j * k * (mu_perp * h / gradient_length + 1j * k * mu_perp)
+    if density is not None:
+        poisson = E * density / (EPSILON_0 * k**2)
+        matrix = np.zeros((3, 3), complex)  # (a_e, a_i, v)
+        matrix[0, 0] = v0e / gradient_length - 1j * k * h * v0e
+        matrix[0, 0] += big_k * (electron_temperature + poisson)
+        matrix[0, 1] = -big_k * poisson
+        matrix[1, 1] = v0i / gradient_length
+        matrix[1, 2] = -1j * k
+        matrix[2, 2] = -nu_i
+        matrix[2, 0] = 1j * (E / ion_mass) * k * poisson
+        matrix[2, 1] = -1j * (E / ion_mass) * k * poisson
+        return 1j * np.linalg.eigvals(matrix)
     m_over = ion_mass / (E * k**2)
-    # polynomial in s: -K m (s - v0i/L)(s + nu_i) + (1 - K ... ) s + const
+    # polynomial in s: -K m (s - v0i/L)(s + nu_i) + (1 - ...) s + const
     quad = -big_k * m_over
     lin = quad * (nu_i - v0i / gradient_length) + 1.0
     const = (
@@ -413,21 +551,26 @@ def gradient_drift_roots(
     return 1j * s
 
 
-def _upwind3(n: np.ndarray, positive: np.ndarray, axis: int) -> np.ndarray:
+def _upwind3(
+    n: np.ndarray, positive: np.ndarray, axis: int, periodic_x: bool = False
+) -> np.ndarray:
     """Third-order upwind-biased face values; ``positive`` selects the flow direction.
 
     Along ``axis = 1`` (periodic) face ``j`` lies between cells ``j - 1`` and ``j``. Along
     ``axis = 0`` the result has ``nx + 1`` faces; the faces next to the boundary
     take the central average and the boundary faces the adjacent cell.
     """
-    if axis == 1:
-        left = np.roll(n, 1, axis=1)
-        left2 = np.roll(n, 2, axis=1)
+    if axis == 1 or periodic_x:
+        left = np.roll(n, 1, axis=axis)
+        left2 = np.roll(n, 2, axis=axis)
         right = n
-        right2 = np.roll(n, -1, axis=1)
+        right2 = np.roll(n, -1, axis=axis)
         pos = (-left2 + 5.0 * left + 2.0 * right) / 6.0
         neg = (2.0 * left + 5.0 * right - right2) / 6.0
-        return np.where(positive, pos, neg)
+        if axis == 1:
+            return np.where(positive, pos, neg)
+        face = np.where(positive[: n.shape[0]], pos, neg)
+        return np.vstack([face, face[:1]])
     nx = n.shape[0]
     faces = np.empty((nx + 1, n.shape[1]))
     faces[0] = n[0]
@@ -439,6 +582,51 @@ def _upwind3(n: np.ndarray, positive: np.ndarray, axis: int) -> np.ndarray:
         # faces 2 .. nx - 2 lie between cells (i - 1, i)
         faces[2 : nx - 1] = np.where(positive[2 : nx - 1], pos, neg)
     return faces
+
+
+@dataclass
+class LinearModes:
+    """The eigenmodes of :meth:`DriftFluid2D.linear_modes`, the most unstable first.
+
+    Attributes:
+        mode: The azimuthal mode number ``m``.
+        wavenumber: ``k = 2 pi m / length_y`` (1/m).
+        eigenvalues: ``s = gamma - i omega`` of ``exp(i k y + s t)``.
+        profiles: The eigenvectors along ``x`` per unknown (``"ne"``, ``"ni"``, ...), shape
+            ``(nx, number of eigenvalues)``.
+        x: The cell centres (m).
+        matrix: The complex Jacobian (rows and columns: the unknowns in blocks of ``nx``).
+    """
+
+    mode: int
+    wavenumber: float
+    eigenvalues: np.ndarray
+    profiles: dict[str, np.ndarray]
+    x: np.ndarray
+    matrix: np.ndarray
+
+    @property
+    def growth_rates(self) -> np.ndarray:
+        """``gamma`` of every eigenvalue (1/s)."""
+        return np.real(self.eigenvalues)
+
+    @property
+    def frequencies(self) -> np.ndarray:
+        """``omega = -Im s`` of every eigenvalue (rad/s)."""
+        return -np.imag(self.eigenvalues)
+
+    @property
+    def phase_speeds(self) -> np.ndarray:
+        """``omega / k`` (m/s), positive along ``+y``."""
+        return self.frequencies / self.wavenumber
+
+    def leading(self) -> tuple[float, float, float]:
+        """``(gamma, omega, phase speed)`` of the most unstable eigenvalue."""
+        return (
+            float(self.growth_rates[0]),
+            float(self.frequencies[0]),
+            float(self.phase_speeds[0]),
+        )
 
 
 @dataclass
@@ -455,21 +643,48 @@ class DriftFluid2D:
         gas_density: The neutral density at rest ``N_0`` (m^-3).
         electron_temperature: ``T_e`` held fixed (eV), or ``None`` for the energy equation.
         momentum_rate: Electron-neutral momentum-transfer rate coefficient ``k_en`` (m^3/s),
-            ``nu_en = k_en N``. PLACEHOLDER (energy dependent in reality); the default
-            is ``2e7 / s`` at 0.6 Pa (Boeuf 2022).
+            ``nu_en = k_en N``: a number, or a function of ``T_e`` (eV; the default is the
+            PLACEHOLDER :func:`argon_momentum_rate`).
         ion_friction_rate: Ion-neutral momentum-transfer rate coefficient (m^3/s).
             PLACEHOLDER.
         ion_mass_u: The ion mass in atomic mass units (argon).
         ion_temperature: ``T_i`` in eV (also the gas temperature).
         ionization_rate: Rate coefficient (m^3/s) as a function of ``T_e`` (eV).
-        inelastic_loss_ev: Electron energy lost per ionization event (eV), excitation
-            included. PLACEHOLDER.
+        excitation_rate: Excitation rate coefficient (m^3/s) as a function of ``T_e``, or
+            ``None`` for none; ``excitation_energy_ev`` is the energy it costs (eV), and
+            ``ionization_energy_ev`` the energy an ionization costs. Both are channels
+            of the electron energy loss, with the elastic loss ``3 (m / M) nu_en (T_e - T_i)``.
         secondary_emission: Electrons emitted per ion hitting the cathode. PLACEHOLDER.
+        cathode_current_density: If given (A/m^2), the cathode emits this net electron current
+            density, whatever the ion flux, instead of ``secondary_emission`` per ion. This is the
+            condition of Boeuf's PIC (``j_e0 = 0.03 A/m^2``, the electrons returning to the cathode
+            re-emitted): a fixed ``gamma`` makes the discharge an avalanche whenever
+            ``gamma M >= 1`` (``M`` the multiplication), a fixed emitted current gives a
+            stable steady state with ``gamma_net = j_e0 / j_ion``.
         secondary_energy_ev: Temperature of the emitted electrons (eV).
         refill_rate: Relaxation rate (1/s) of the gas towards ``N_0`` (the gas flow and
             the sputter wind): the explicit parameter, with ``depletion``, of the neutral dynamics.
         depletion: Fraction of the ionization events that remove a neutral (1: full
             depletion, 0: a frozen gas).
+        field_bc: ``None`` for the electrodes at ``-voltage`` and 0 V. A number ``E_0`` (V/m)
+            replaces them by a fixed axial field ``E_x = E_0`` at both ends (a pinned
+            potential), so that a perturbation can be uniform along ``x``: the setting
+            for comparing with the local dispersion relation.
+        heating_scale: Factor on the Joule heating of the electron energy (a diagnostic switch).
+        floor_added: Running total of the density (summed over cells, m^-3) that the floor
+            ``N_FLOOR`` on ``ne``, ``ni`` and ``N`` created in the Euler stages, a diagnostic of
+            how much charge the limiter invents; reset it to zero to start counting.
+        anode_thermal_flux: Adds the thermal flux of an absorbing wall, ``n v_bar / 2`` with
+            ``v_bar = sqrt(8 e T_e / (pi m))`` (Hagelaar et al. 2000, reflection 0), to the drift
+            flux of the electrons at the anode, which otherwise only leave at the drift rate; the
+            outflow is then the larger of the two, and the density next to the anode falls to
+            what carries the current. Tested for Boeuf's case without success: the 1D discharge
+            then decays and runs away (no sheath barrier for the wall flux), so it is off.
+        diamagnetic: Factor on the electron pressure-gradient (diamagnetic) force in the fluxes
+            and the Poisson solve (a diagnostic switch for the linear analysis; 1 is the model).
+        periodic_x: Periodic along ``x`` as well, for a uniform plasma in a uniform field
+            ``field_bc`` (required) and a uniform ``B``: pure Fourier modes ``(k_x, k_y)``
+            exist, which is what the local dispersion relation describes.
         bohm: ``alpha`` of the anomalous frequency ``alpha omega_ce / 16`` (0 off).
         external_sources: Volume sources added to the time derivative of an unknown
             (``"ne"``, ``"ni"``, ``"N"``, ``"vx"``, ``"vy"``, ``"w"``), numbers or arrays
@@ -482,19 +697,30 @@ class DriftFluid2D:
     nx: int
     ny: int
     voltage: float = 260.0
-    magnetic_field: Callable[[np.ndarray], np.ndarray] | float = 0.0
+    magnetic_field: Callable[[Any], Any] | float = 0.0
     gas_density: float = 1.45e20
     electron_temperature: float | None = 5.0
-    momentum_rate: float = 1.4e-13
+    momentum_rate: float | Callable[[Any], Any] = argon_momentum_rate
     ion_friction_rate: float = 1.0e-15
     ion_mass_u: float = 39.948
     ion_temperature: float = 0.025
-    ionization_rate: Callable[[np.ndarray], np.ndarray] = argon_ionization_rate
-    inelastic_loss_ev: float = 30.0
+    ionization_rate: Callable[[Any], Any] = argon_ionization_rate
+    excitation_rate: Callable[[Any], Any] | None = argon_excitation_rate
+    ionization_energy_ev: float = 15.76
+    excitation_energy_ev: float = 11.56
     secondary_emission: float = 0.06
+    cathode_current_density: float | None = None
     secondary_energy_ev: float = 1.0
     refill_rate: float = 1.0e4
     depletion: float = 1.0
+    field_bc: float | None = None
+    periodic_x: bool = False
+    heating_scale: float = 1.0
+    diamagnetic: float = 1.0
+    anode_thermal_flux: bool = False
+    floor_added: dict = field(default_factory=lambda: {"ne": 0.0, "ni": 0.0, "N": 0.0})
+    _rate_override: np.ndarray | None = field(default=None, repr=False)
+    _lu: spla.SuperLU | None = field(default=None, repr=False)
     bohm: float = 0.0
     external_sources: dict[str, np.ndarray] = field(default_factory=dict)
 
@@ -502,6 +728,8 @@ class DriftFluid2D:
         """Build the grid and the sparse operators."""
         if self.nx < 4 or self.ny < 4:
             raise ValueError("need at least 4 cells in each direction")
+        if self.periodic_x and self.field_bc is None:
+            raise ValueError("periodic_x needs field_bc, the uniform axial field")
         self.dx = self.length_x / self.nx
         self.dy = self.length_y / self.ny
         self.x = (np.arange(self.nx) + 0.5) * self.dx
@@ -512,11 +740,14 @@ class DriftFluid2D:
         if not callable(bfun):
             value = float(bfun)
 
-            def bfun(x):
+            def uniform_field(x):
                 return np.full_like(np.asarray(x, dtype=float), value)
+
+            bfun = uniform_field
 
         self._bc = np.asarray(bfun(self.x), dtype=float)
         self._bf = np.asarray(bfun(self.xf), dtype=float)
+        self._k0 = 1.0 if callable(self.momentum_rate) else float(self.momentum_rate)
         self._omega_xf = (E * self._bf / ELECTRON_MASS)[:, None]
         self._omega_yf = (E * self._bc / ELECTRON_MASS)[:, None]
         self._build_operators()
@@ -536,13 +767,16 @@ class DriftFluid2D:
         div_y = (shift_up - iy) / dy
         # x: cells -> faces (nx + 1 faces), Dirichlet potentials as affine terms
         rows, cols, vals = [], [], []
+        if self.periodic_x:
+            return self._build_periodic_x_operators(ix, iy, d_yc, d_yf, a_yf, div_y)
         for f in range(1, nx):
             rows += [f, f]
             cols += [f, f - 1]
             vals += [1.0 / dx, -1.0 / dx]
-        rows += [0, nx]
-        cols += [0, nx - 1]
-        vals += [2.0 / dx, -2.0 / dx]
+        if self.field_bc is None:
+            rows += [0, nx]
+            cols += [0, nx - 1]
+            vals += [2.0 / dx, -2.0 / dx]
         d_xf = sp.csr_matrix((vals, (rows, cols)), shape=(nx + 1, nx))
         rows, cols, vals = [], [], []
         for f in range(1, nx):
@@ -556,7 +790,10 @@ class DriftFluid2D:
         div_x = sp.csr_matrix(
             (
                 np.r_[np.full(nx, -1.0 / dx), np.full(nx, 1.0 / dx)],
-                (np.r_[np.arange(nx), np.arange(nx)], np.r_[np.arange(nx), np.arange(nx) + 1]),
+                (
+                    np.r_[np.arange(nx), np.arange(nx)],
+                    np.r_[np.arange(nx), np.arange(nx) + 1],
+                ),
             ),
             shape=(nx, nx + 1),
         )
@@ -568,7 +805,10 @@ class DriftFluid2D:
             vals += [0.5 / dx, -0.5 / dx]
         rows += [0, 0, nx - 1, nx - 1]
         cols += [1, 0, nx - 1, nx - 2]
-        vals += [0.5 / dx, 0.5 / dx, -0.5 / dx, -0.5 / dx]
+        if self.field_bc is None:
+            vals += [0.5 / dx, 0.5 / dx, -0.5 / dx, -0.5 / dx]
+        else:  # fixed field: the ghost cell extends the potential linearly
+            vals += [0.5 / dx, -0.5 / dx, 0.5 / dx, -0.5 / dx]
         d_xc = sp.csr_matrix((vals, (rows, cols)), shape=(nx, nx))
         mask = np.ones(nx + 1)
         mask[[0, nx]] = 0.0
@@ -583,6 +823,54 @@ class DriftFluid2D:
         self._divx = sp.kron(div_x, iy, format="csr")
         self._divy = sp.kron(ix, div_y, format="csr")
         self._pyxf = sp.kron(a_xf, d_yc, format="csr")  # d_y p averaged to x-faces
+        self._axf = sp.kron(a_xf, iy, format="csr")
+        self._ayf = sp.kron(ix, a_yf, format="csr")
+        self._shape_xf = (nx + 1, ny)
+        self._build_poisson_pattern()
+
+    def _build_periodic_x_operators(self, ix, iy, d_yc, d_yf, a_yf, div_y) -> None:
+        """The operators of a domain periodic in ``x``: face ``nx`` repeats face 0."""
+        nx, ny, dx = self.nx, self.ny, self.dx
+        faces = np.arange(nx + 1)
+        right, left = faces % nx, (faces - 1) % nx
+        d_xf = sp.csr_matrix(
+            (
+                np.r_[np.full(nx + 1, 1.0 / dx), np.full(nx + 1, -1.0 / dx)],
+                (np.r_[faces, faces], np.r_[right, left]),
+            ),
+            shape=(nx + 1, nx),
+        )
+        a_xf = sp.csr_matrix(
+            (
+                np.full(2 * (nx + 1), 0.5),
+                (np.r_[faces, faces], np.r_[right, left]),
+            ),
+            shape=(nx + 1, nx),
+        )
+        cells = np.arange(nx)
+        d_xc = sp.csr_matrix(
+            (
+                np.r_[np.full(nx, 0.5 / dx), np.full(nx, -0.5 / dx)],
+                (np.r_[cells, cells], np.r_[(cells + 1) % nx, (cells - 1) % nx]),
+            ),
+            shape=(nx, nx),
+        )
+        div_x = sp.csr_matrix(
+            (
+                np.r_[np.full(nx, -1.0 / dx), np.full(nx, 1.0 / dx)],
+                (np.r_[cells, cells], np.r_[cells, cells + 1]),
+            ),
+            shape=(nx, nx + 1),
+        )
+        self._gxf = sp.kron(d_xf, iy, format="csr")
+        self._gyxf_masked = sp.kron(a_xf, d_yc, format="csr")
+        self._gyf = sp.kron(ix, d_yf, format="csr")
+        self._gxyf = sp.kron(d_xc, a_yf, format="csr")
+        self._dxc = sp.kron(d_xc, iy, format="csr")
+        self._dyc = sp.kron(ix, d_yc, format="csr")
+        self._divx = sp.kron(div_x, iy, format="csr")
+        self._divy = sp.kron(ix, div_y, format="csr")
+        self._pyxf = sp.kron(a_xf, d_yc, format="csr")
         self._axf = sp.kron(a_xf, iy, format="csr")
         self._ayf = sp.kron(ix, a_yf, format="csr")
         self._shape_xf = (nx + 1, ny)
@@ -611,10 +899,12 @@ class DriftFluid2D:
                 drows = div_csc.indices[div_csc.indptr[face] : div_csc.indptr[face + 1]]
                 dvals = div_csc.data[div_csc.indptr[face] : div_csc.indptr[face + 1]]
                 lo, hi = grad_csr.indptr[face], grad_csr.indptr[face + 1]
-                for r, dv in zip(drows, dvals):
-                    for c, gv in zip(grad_csr.indices[lo:hi], grad_csr.data[lo:hi]):
+                for r, dv in zip(drows, dvals, strict=True):
+                    for c, gv in zip(
+                        grad_csr.indices[lo:hi], grad_csr.data[lo:hi], strict=True
+                    ):
                         entries.append((r, c, offsets[k] + face, -dv * gv))
-        rows, cols, idx, vals = (np.array(x) for x in zip(*entries))
+        rows, cols, idx, vals = (np.array(x) for x in zip(*entries, strict=True))
         key = rows * ncell + cols
         unique, position = np.unique(key, return_inverse=True)
         self._pat_rows = unique // ncell
@@ -624,7 +914,18 @@ class DriftFluid2D:
         )
 
     def _affine(self) -> tuple[np.ndarray, np.ndarray]:
-        """Constant parts of the face gradients of the potential from the Dirichlet values."""
+        """Constant parts of the face gradients of the potential from the boundary values."""
+        if self.periodic_x:
+            assert self.field_bc is not None
+            bx = np.full(self.nx + 1, -self.field_bc)
+            bc = np.full(self.nx, -self.field_bc)
+            return np.repeat(bx, self.ny), np.repeat(bc, self.ny)
+        if self.field_bc is not None:
+            bx = np.zeros(self.nx + 1)
+            bx[[0, -1]] = -self.field_bc
+            bc = np.zeros(self.nx)
+            bc[[0, -1]] = -0.5 * self.field_bc
+            return np.repeat(bx, self.ny), np.repeat(bc, self.ny)
         phi_c, phi_a = -self.voltage, 0.0
         bx = np.zeros(self.nx + 1)
         bx[0] = -2.0 * phi_c / self.dx
@@ -654,6 +955,10 @@ class DriftFluid2D:
         if te is None:
             te = self.electron_temperature if self.electron_temperature else 3.0
         gas = self.gas_density if gas_density is None else gas_density
+        if potential is None and self.field_bc is not None:
+            potential = np.broadcast_to(
+                (-self.field_bc * self.x)[:, None], shape
+            ).copy()
         if potential is None:
             potential = np.broadcast_to(
                 (-self.voltage * (1.0 - self.x / self.length_x))[:, None], shape
@@ -675,15 +980,41 @@ class DriftFluid2D:
         """``(mu_perp, h)`` on the x- and y-faces."""
         out = []
         for gas, omega in ((gas_xf, self._omega_xf), (gas_yf, self._omega_yf)):
-            nu = np.maximum(self.momentum_rate * gas + self._bohm_nu(omega), 1.0)
+            nu = np.maximum(self._k0 * gas + self._bohm_nu(omega), 1.0)
             out.append((E * nu / (ELECTRON_MASS * (nu**2 + omega**2)), omega / nu))
         return out
+
+    def _collision_gas(self, gas: np.ndarray, te: np.ndarray) -> np.ndarray:
+        """The gas density times ``k_en(T_e) / k_0``: what the collision frequency scales with."""
+        if callable(self.momentum_rate):
+            return gas * self.momentum_rate(te)
+        return gas
+
+    def _energy_loss(self, ne: np.ndarray, te: np.ndarray, gas: np.ndarray, gas_c):
+        """Electron energy loss rate (eV m^-3 s^-1): elastic, ionization and excitation."""
+        elastic = (
+            3.0
+            * ELECTRON_MASS
+            / self.ion_mass
+            * self._k0
+            * gas_c
+            * ne
+            * (te - self.ion_temperature)
+        )
+        loss = elastic + self.ionization_energy_ev * self.ionization_rate(te) * gas * ne
+        if self.excitation_rate is not None:
+            loss = (
+                loss + self.excitation_energy_ev * self.excitation_rate(te) * gas * ne
+            )
+        return loss
 
     def _bohm_nu(self, omega):
         return self.bohm * np.abs(omega) / 16.0
 
     def _dx_cell(self, f: np.ndarray) -> np.ndarray:
         """Central ``d f / dx`` on cells, one-sided half-steps at the ends."""
+        if self.periodic_x:
+            return (np.roll(f, -1, axis=0) - np.roll(f, 1, axis=0)) / (2.0 * self.dx)
         d = np.empty_like(f)
         d[1:-1] = (f[2:] - f[:-2]) / (2.0 * self.dx)
         d[0] = (f[1] - f[0]) / (2.0 * self.dx)
@@ -712,21 +1043,26 @@ class DriftFluid2D:
         """``grad p`` at the x-faces ``(dx, dy)`` and the y-faces ``(dx, dy)``."""
         nx = self.nx
         dpx_xf = np.empty(self._shape_xf)
-        dpx_xf[1:nx] = (p[1:] - p[:-1]) / self.dx
-        dpx_xf[0] = (p[1] - p[0]) / self.dx
-        dpx_xf[nx] = (p[-1] - p[-2]) / self.dx
+        if self.periodic_x:
+            dpx_xf[:nx] = (p - np.roll(p, 1, axis=0)) / self.dx
+            dpx_xf[nx] = dpx_xf[0]
+        else:
+            dpx_xf[1:nx] = (p[1:] - p[:-1]) / self.dx
+            dpx_xf[0] = (p[1] - p[0]) / self.dx
+            dpx_xf[nx] = (p[-1] - p[-2]) / self.dx
         dpy_xf = (self._pyxf @ p.ravel()).reshape(self._shape_xf)
         dpy_yf = (p - np.roll(p, 1, axis=1)) / self.dy
         d = self._dx_cell(p)
         dpx_yf = 0.5 * (d + np.roll(d, 1, axis=1))
-        return dpx_xf, dpy_xf, dpx_yf, dpy_yf
+        scale = self.diamagnetic
+        return scale * dpx_xf, scale * dpy_xf, scale * dpx_yf, scale * dpy_yf
 
     def _face_densities(self, n, mu_xf, h_xf, mu_yf, h_yf, fields):
         """Upwind-biased densities on the faces, by the sign of the E x B-like drift."""
         ex_xf, ey_xf, ex_yf, ey_yf = fields[:4]
         vn_x = -mu_xf * (ex_xf - h_xf * ey_xf)
         vn_y = -mu_yf * (ey_yf + h_yf * ex_yf)
-        n_xf = np.maximum(_upwind3(n, vn_x > 0.0, 0), 0.0)
+        n_xf = np.maximum(_upwind3(n, vn_x > 0.0, 0, self.periodic_x), 0.0)
         n_yf = np.maximum(_upwind3(n, vn_y > 0.0, 1), 0.0)
         return n_xf, n_yf
 
@@ -745,13 +1081,25 @@ class DriftFluid2D:
         fx_yf = n_yf * ex_yf + dpx_yf
         gam_x = -scale * mu_xf * (fx_xf - h_xf * fy_xf)
         gam_y = -scale * mu_yf * (fy_yf + h_yf * fx_yf)
-        return gam_x, gam_y, (n_xf, n_yf, mu_xf, h_xf, mu_yf, h_yf, dpx_xf, dpy_xf, dpx_yf, dpy_yf)
+        return (
+            gam_x,
+            gam_y,
+            (n_xf, n_yf, mu_xf, h_xf, mu_yf, h_yf, dpx_xf, dpy_xf, dpx_yf, dpy_yf),
+        )
 
     def _ion_fluxes(self, ni, vel):
         """Upwind ion fluxes on the faces; outflow only through the electrodes."""
         vx, vy = vel
         nx = self.nx
         vxf = np.empty(self._shape_xf)
+        if self.periodic_x:
+            vxf[:nx] = 0.5 * (vx + np.roll(vx, 1, axis=0))
+            vxf[nx] = vxf[0]
+            nxf = np.where(vxf[:nx] > 0.0, np.roll(ni, 1, axis=0), ni)
+            nxf = np.vstack([nxf, nxf[:1]])
+            vyf = 0.5 * (vy + np.roll(vy, 1, axis=1))
+            nyf = np.where(vyf > 0.0, np.roll(ni, 1, axis=1), ni)
+            return nxf * vxf, nyf * vyf
         vxf[1:nx] = 0.5 * (vx[1:] + vx[:-1])
         vxf[0], vxf[nx] = vx[0], vx[-1]
         nxf = np.where(vxf > 0.0, np.vstack([ni[:1], ni]), np.vstack([ni, ni[-1:]]))
@@ -774,25 +1122,30 @@ class DriftFluid2D:
         sig_x = E * n_xf * mu_xf
         sig_y = E * n_yf * mu_yf
         # no conduction through the electrodes: their electron flux is explicit
-        sig_x[[0, nx]] = 0.0
+        if not self.periodic_x:
+            sig_x[[0, nx]] = 0.0
         sxx = EPSILON_0 + dtau * sig_x
         sxy = -dtau * sig_x * h_xf
-        sxy[[0, nx]] = 0.0
+        if not self.periodic_x:
+            sxy[[0, nx]] = 0.0
         syy = EPSILON_0 + dtau * sig_y
         syx = dtau * sig_y * h_yf
         # known current: ions, electron pressure part, and the electrode boundary fluxes
         jk_x = E * gam_ix + E * mu_xf * (dpx_xf - h_xf * dpy_xf)
         jk_y = E * gam_iy + E * mu_yf * (dpy_yf + h_yf * dpx_yf)
-        anode = self._anode_flux(ne, te, gas, lagged[0][-1], lagged[1][-1])
-        jk_x[0] = E * gam_ix[0] + E * self.secondary_emission * gam_ix[0]
-        jk_x[nx] = E * gam_ix[nx] - E * anode
+        if not self.periodic_x:
+            anode = self._anode_flux(ne, te, gas, lagged[0][-1], lagged[1][-1])
+            jk_x[0] = E * gam_ix[0] - E * self._cathode_flux(gam_ix[0])
+            jk_x[nx] = E * gam_ix[nx] - E * anode
         div_jk = self._divx @ jk_x.ravel() + self._divy @ jk_y.ravel()
         rho = E * (ni - ne).ravel()
         src_e = self.external_sources.get("ne", 0.0)
         src_i = self.external_sources.get("ni", 0.0)
         rho = rho + dtau * E * np.ravel(np.broadcast_to(src_i - src_e, ne.shape))
         bx, bc = self._affine()
-        coefficients = np.concatenate([sxx.ravel(), sxy.ravel(), syy.ravel(), syx.ravel()])
+        coefficients = np.concatenate(
+            [sxx.ravel(), sxy.ravel(), syy.ravel(), syx.ravel()]
+        )
         matrix = sp.csc_matrix(
             (self._pat_b @ coefficients, (self._pat_rows, self._pat_cols)),
             shape=(nx * ny, nx * ny),
@@ -803,11 +1156,43 @@ class DriftFluid2D:
             + self._divx @ (sxx.ravel() * bx)
             + self._divy @ (syx.ravel() * bc)
         )
-        return spla.splu(matrix, permc_spec="COLAMD").solve(rhs).reshape(nx, ny)
+        if self.field_bc is not None:  # pure Neumann: pin the potential of cell 0
+            matrix = matrix.tolil()
+            matrix[0, 0] = matrix[0, 0] * (1.0 + 1e8)
+            matrix = matrix.tocsc()
+            rhs[0] = 0.0
+        return self._solve_linear(matrix, rhs).reshape(nx, ny)
+
+    def _cathode_flux(self, ion_flux: np.ndarray) -> np.ndarray:
+        """Electron flux into the domain at the cathode, for the ion flux ``ion_flux`` (< 0)."""
+        if self.cathode_current_density is not None:
+            return np.full_like(ion_flux, self.cathode_current_density / E)
+        return -self.secondary_emission * ion_flux
+
+    def _solve_linear(self, matrix, rhs: np.ndarray) -> np.ndarray:
+        """Solve ``matrix x = rhs``, refining with the last LU factors while they still work.
+
+        The matrix changes by a few percent per stage, so the previous factorisation is a
+        very good preconditioner; the iteration runs to a relative residual of 1e-12
+        (the solution is as exact as a fresh factorisation) and refactorises when it
+        does not get there in a few sweeps.
+        """
+        scale = np.linalg.norm(rhs) + 1e-300
+        if self._lu is not None:
+            x = self._lu.solve(rhs)
+            for _ in range(10):
+                residual = rhs - matrix @ x
+                if np.linalg.norm(residual) <= 1e-12 * scale:
+                    return x
+                x = x + self._lu.solve(residual)
+        lu = spla.splu(matrix, permc_spec="COLAMD")
+        self._lu = lu
+        return lu.solve(rhs)
 
     def _anode_flux(self, ne, te, gas, ex, ey):
         """Electron flux out through the anode face: the drift of the adjacent cell, outflow only.
 
+        With ``anode_thermal_flux`` the thermal flux of an absorbing wall is added.
         ``ex``, ``ey`` are the field components on the anode face (length ``ny``).
         """
         gas_xf, gas_yf = self._face_gas(gas)
@@ -815,7 +1200,11 @@ class DriftFluid2D:
         dpx_xf, dpy_xf, _, _ = self._pressure_gradients(ne * te)
         fx = ne[-1] * ex + dpx_xf[-1]
         fy = ne[-1] * ey + dpy_xf[-1]
-        return np.maximum(-mu_xf[-1] * (fx - h_xf[-1] * fy), 0.0)
+        flux = -mu_xf[-1] * (fx - h_xf[-1] * fy)
+        if self.anode_thermal_flux:
+            mean_speed = np.sqrt(8.0 * E * te[-1] / (np.pi * ELECTRON_MASS))
+            flux = flux + 0.5 * ne[-1] * mean_speed
+        return np.maximum(flux, 0.0)
 
     # -- the right-hand side -----------------------------------------------------------
 
@@ -828,18 +1217,27 @@ class DriftFluid2D:
             if energy
             else np.full_like(ne, self.electron_temperature)
         )
+        gas_c = self._collision_gas(gas, te)
         prev = self._fields(phi_prev)
         gam_ix, gam_iy = self._ion_fluxes(ni, (vx, vy))
-        phi = self._solve_potential(ne, ni, te, gas, dtau, gam_ix, gam_iy, prev)
+        phi = self._solve_potential(ne, ni, te, gas_c, dtau, gam_ix, gam_iy, prev)
         fields = self._fields(phi)
-        gam_x, gam_y, _ = self._electron_like_flux(ne, te, fields, gas, lagged=prev)
-        gam_x[0] = -self.secondary_emission * gam_ix[0]
-        # explicit in the field, as in the Poisson solve, so the discrete charge balance is exact
-        gam_x[-1] = self._anode_flux(ne, te, gas, prev[0][-1], prev[1][-1])
+        gam_x, gam_y, _ = self._electron_like_flux(ne, te, fields, gas_c, lagged=prev)
+        if not self.periodic_x:
+            gam_x[0] = self._cathode_flux(gam_ix[0])
+            # explicit in the field, as in the Poisson solve, so the discrete charge
+            # balance is exact
+            gam_x[-1] = self._anode_flux(ne, te, gas_c, prev[0][-1], prev[1][-1])
         ecx, ecy = fields[4], fields[5]
         rate = self.ionization_rate(te) * gas * ne
-        div_e = (self._divx @ gam_x.ravel() + self._divy @ gam_y.ravel()).reshape(ne.shape)
-        div_i = (self._divx @ gam_ix.ravel() + self._divy @ gam_iy.ravel()).reshape(ne.shape)
+        if self._rate_override is not None:
+            rate = self._rate_override
+        div_e = (self._divx @ gam_x.ravel() + self._divy @ gam_y.ravel()).reshape(
+            ne.shape
+        )
+        div_i = (self._divx @ gam_ix.ravel() + self._divy @ gam_iy.ravel()).reshape(
+            ne.shape
+        )
         du = {"ne": -div_e + rate, "ni": -div_i + rate}
         du["N"] = -self.depletion * rate + self.refill_rate * (self.gas_density - gas)
         # ion momentum: field, friction, pressure, upwind advection
@@ -852,25 +1250,129 @@ class DriftFluid2D:
         adv_x = self._advect(vx, vx, vy)
         adv_y = self._advect(vy, vx, vy)
         # semi-implicit friction: dv/dt = F - nu v, evaluated for the Euler step dtau
-        du["vx"] = (c * ecx - t_over_m * grad_nx / ni_safe - adv_x - nu_i * vx)
-        du["vy"] = (c * ecy - t_over_m * grad_ny / ni_safe - adv_y - nu_i * vy)
+        du["vx"] = c * ecx - t_over_m * grad_nx / ni_safe - adv_x - nu_i * vx
+        du["vy"] = c * ecy - t_over_m * grad_ny / ni_safe - adv_y - nu_i * vy
         if energy:
             q_x, q_y, _ = self._electron_like_flux(
-                ne * te * 1.5, te, fields, gas, scale=5.0 / 3.0, lagged=prev
+                ne * te * 1.5, te, fields, gas_c, scale=5.0 / 3.0, lagged=prev
             )
-            q_x[0] = 2.0 * self.secondary_energy_ev * gam_x[0]
-            q_x[-1] = 2.0 * te[-1].mean() * np.maximum(gam_x[-1], 0.0)
-            div_q = (self._divx @ q_x.ravel() + self._divy @ q_y.ravel()).reshape(ne.shape)
+            if not self.periodic_x:
+                q_x[0] = 2.0 * self.secondary_energy_ev * gam_x[0]
+                q_x[-1] = 2.0 * te[-1].mean() * np.maximum(gam_x[-1], 0.0)
+            div_q = (self._divx @ q_x.ravel() + self._divy @ q_y.ravel()).reshape(
+                ne.shape
+            )
             gcx = 0.5 * (gam_x[:-1] + gam_x[1:])
             gcy = 0.5 * (gam_y + np.roll(gam_y, -1, axis=1))
             joule = -(gcx * ecx + gcy * ecy)
-            nu_en = self.momentum_rate * gas
-            elastic = 3.0 * ELECTRON_MASS / self.ion_mass * nu_en * ne * (te - self.ion_temperature)
-            du["w"] = -div_q + joule - elastic - self.inelastic_loss_ev * rate
+            loss = self._energy_loss(ne, te, gas, gas_c)
+            du["w"] = -div_q + self.heating_scale * joule - loss
+            # d(loss)/dw for the implicit treatment of the loss in :meth:`_euler`
+            te_up = te * 1.001
+            dloss = (
+                self._energy_loss(ne, te_up, gas, self._collision_gas(gas, te_up))
+                - loss
+            ) / (1.5 * np.maximum(ne, N_FLOOR) * 0.001 * te)
+            du["_dloss"] = np.maximum(dloss, 0.0)
         for key, source in self.external_sources.items():
             if key in du:
                 du[key] = du[key] + source
         return du, phi
+
+    def linear_modes(
+        self,
+        state: DriftFluid2DState,
+        mode: int,
+        frozen: tuple[str, ...] = (),
+        epsilon: float = 1e-6,
+    ) -> LinearModes:
+        """Linear stability of a y-uniform state to the azimuthal mode ``mode``, x-resolved.
+
+        The Jacobian of the semi-discrete operator (the time derivative of every unknown,
+        with the potential from Poisson's equation) about ``state``, restricted to
+        perturbations ``exp(i k y)``, ``k = 2 pi mode / length_y``: one column per unknown and
+        cell, by finite differences with a cosine and a sine perturbation (the operator is
+        real and invariant along ``y``, so the response to ``exp(i k y)`` stays in that
+        mode). The electrodes, the gradients, the Hall tensor and the energy equation are
+        all in it; nothing is x-uniform or local. The state is made stationary by
+        sources of its own residual (as :meth:`stationary_sources`); ``external_sources``
+        are restored afterwards.
+
+        ``frozen`` switches off responses, to see what each does: ``"temperature"`` (``T_e``
+        held at its value, no energy perturbation), ``"ionization"`` (the ionization source held
+        at its base value), ``"gas"`` (the neutral density not perturbed).
+
+        With ``s = gamma - i omega`` the eigenvalues, ``exp(i k y + s t)``, ``gamma > 0``
+        grows and ``omega / k > 0`` moves along ``+y`` (the E x B direction when ``E_x < 0``
+        and ``B_z > 0``).
+        """
+        ny, nx = self.ny, self.nx
+        for name in ("electron_density", "ion_density", "electron_temperature"):
+            value = getattr(state, name)
+            if np.abs(value - value[:, :1]).max() > 1e-9 * np.abs(value).max():
+                raise ValueError(f"the state must be uniform along y ({name})")
+        k = 2.0 * np.pi * mode / self.length_y
+        saved = (self.external_sources, self.electron_temperature, self._rate_override)
+        try:
+            if "temperature" in frozen and self.electron_temperature is None:
+                self.electron_temperature = state.electron_temperature.copy()
+            if "ionization" in frozen:
+                self._rate_override = None
+                self._rate_override = (
+                    self.ionization_rate(state.electron_temperature)
+                    * state.gas_density
+                    * state.electron_density
+                )
+            self.external_sources = {}
+            u0 = self._pack(state)
+            phi0 = state.potential
+
+            def evaluate(u):
+                # the anode flux and the upwind direction use the field of the previous
+                # stage: take the one the state itself gives, so the lag is consistent
+                _, phi = self._rhs(u, phi0, 0.0)
+                return self._rhs(u, phi, 0.0)[0]
+
+            du0 = evaluate(u0)
+            self.external_sources = {k_: -v for k_, v in du0.items() if k_ in u0}
+            base = evaluate(u0)
+            keys = [name for name in u0 if not (name == "N" and "gas" in frozen)]
+            cos, sin = np.cos(k * self.y), np.sin(k * self.y)
+            phase = np.exp(-1j * k * self.y)
+            matrix = np.zeros((len(keys) * nx, len(keys) * nx), complex)
+            for column_key, key in enumerate(keys):
+                scale = np.abs(u0[key][:, 0]) * epsilon
+                scale = np.where(scale > 0.0, scale, epsilon)
+                if key in ("vx", "vy"):
+                    scale = np.full(nx, epsilon * (np.abs(u0[key]).max() + 1.0))
+                for i in range(nx):
+                    responses = []
+                    for pattern in (cos, sin):
+                        u = dict(u0)
+                        u[key] = u0[key].copy()
+                        u[key][i, :] += scale[i] * pattern
+                        responses.append(evaluate(u))
+                    for row_key, name in enumerate(keys):
+                        response = (
+                            (responses[0][name] - base[name])
+                            + 1j * (responses[1][name] - base[name])
+                        ) / scale[i]
+                        matrix[
+                            row_key * nx : (row_key + 1) * nx, column_key * nx + i
+                        ] = (response @ phase) / ny
+        finally:
+            self.external_sources, self.electron_temperature, self._rate_override = (
+                saved
+            )
+        values, vectors = np.linalg.eig(matrix)
+        order = np.argsort(-np.real(values))
+        profiles = {
+            name: vectors[row * nx : (row + 1) * nx][:, order]
+            for row, name in enumerate(keys)
+        }
+        return LinearModes(
+            mode, k, values[order], profiles, self.x.copy(), matrix=matrix
+        )
 
     def stationary_sources(self, state: DriftFluid2DState) -> dict[str, np.ndarray]:
         """The external sources that make ``state`` stationary (well-balanced equilibria).
@@ -883,13 +1385,16 @@ class DriftFluid2D:
         self.external_sources = {}
         u = self._pack(state)
         du, _ = self._rhs(u, state.potential, 0.0)
-        self.external_sources = {key: -value for key, value in du.items()}
+        self.external_sources = {key: -value for key, value in du.items() if key in u}
         return self.external_sources
 
     def _advect(self, f, vx, vy):
         """``v . grad f`` by first-order upwind; zero gradient at the electrodes."""
-        fm = np.vstack([f[:1], f[:-1]])
-        fp = np.vstack([f[1:], f[-1:]])
+        if self.periodic_x:
+            fm, fp = np.roll(f, 1, axis=0), np.roll(f, -1, axis=0)
+        else:
+            fm = np.vstack([f[:1], f[:-1]])
+            fp = np.vstack([f[1:], f[-1:]])
         dfx = np.where(vx > 0.0, (f - fm) / self.dx, (fp - f) / self.dx)
         dfy = np.where(
             vy > 0.0,
@@ -914,7 +1419,9 @@ class DriftFluid2D:
 
     def _unpack(self, u: dict, phi: np.ndarray, time: float) -> DriftFluid2DState:
         if "w" in u:
-            te = np.clip(u["w"] / (1.5 * np.maximum(u["ne"], N_FLOOR)), TE_FLOOR, TE_CEIL)
+            te = np.clip(
+                u["w"] / (1.5 * np.maximum(u["ne"], N_FLOOR)), TE_FLOOR, TE_CEIL
+            )
         else:
             te = np.full_like(u["ne"], self.electron_temperature)
         return DriftFluid2DState(
@@ -933,11 +1440,16 @@ class DriftFluid2D:
         du, phi = self._rhs(u, phi_prev, dt)
         out = {}
         for key, value in u.items():
-            new = value + dt * du[key]
-            if key in ("ne", "ni", "N"):
-                new = np.maximum(new, N_FLOOR)
-            elif key == "w":
+            if key == "w":
+                # backward Euler on the (stiff, local) energy loss, linearised in w
+                new = value + dt * du["w"] / (1.0 + dt * du["_dloss"])
                 new = np.maximum(new, 1.5 * TE_FLOOR * N_FLOOR)
+            else:
+                new = value + dt * du[key]
+                if key in ("ne", "ni", "N"):
+                    clipped = np.maximum(new, N_FLOOR)
+                    self.floor_added[key] += float((clipped - new).sum())
+                    new = clipped
             out[key] = new
         return out, phi
 
@@ -953,9 +1465,15 @@ class DriftFluid2D:
         return self._unpack(u3, phi, state.time + dt)
 
     def suggest_timestep(self, state: DriftFluid2DState, cfl: float = 0.4) -> float:
-        """A step with Courant number ``cfl`` for the electron drift and the ions."""
+        """A step with Courant number ``cfl``: electron drift, ions, and diffusion.
+
+        The diffusive limit is that of the (explicit) energy and density diffusion with
+        ``D = (5/3) mu_perp T_e``, which becomes the binding one where ``B`` is small
+        and the electrons are hot.
+        """
         fields = self._fields(state.potential)
-        gas_xf, gas_yf = self._face_gas(state.gas_density)
+        gas_c = self._collision_gas(state.gas_density, state.electron_temperature)
+        gas_xf, gas_yf = self._face_gas(gas_c)
         (mu_xf, h_xf), (mu_yf, h_yf) = self._collisions(gas_xf, gas_yf)
         vx = np.abs(mu_xf * (fields[0] - h_xf * fields[1]))
         vy = np.abs(mu_yf * (fields[3] + h_yf * fields[2]))
@@ -963,7 +1481,13 @@ class DriftFluid2D:
         speed_y = max(vy.max(), np.abs(state.ion_velocity[1]).max())
         te = np.max(state.electron_temperature)
         sound = np.sqrt(E * (te + self.ion_temperature) / self.ion_mass)
-        return cfl / ((speed_x + sound) / self.dx + (speed_y + sound) / self.dy)
+        step = cfl / ((speed_x + sound) / self.dx + (speed_y + sound) / self.dy)
+        mu_max = max(mu_xf.max(), mu_yf.max())
+        # cells without electrons (the T_e of w / n is meaningless there) do not set the limit
+        populated = state.electron_density > 1e-3 * state.electron_density.max()
+        diffusivity = 5.0 / 3.0 * mu_max * state.electron_temperature[populated].max()
+        diffusive = 0.5 * cfl / (diffusivity * (1.0 / self.dx**2 + 1.0 / self.dy**2))
+        return min(step, diffusive)
 
     def run(
         self,
@@ -1010,7 +1534,7 @@ class DriftFluid2D:
         next_record = state.time
         t_stop = state.time + t_end
         steps = 0
-        step_size = dt
+        step_size = dt if dt is not None else self.suggest_timestep(state, cfl)
         while state.time < t_stop - 1e-15 * t_end:
             if state.time >= next_record - 1e-12 * record_every:
                 record(state)
@@ -1057,7 +1581,7 @@ class DriftFluid2D:
             state.electron_density,
             state.electron_temperature,
             fields,
-            state.gas_density,
+            self._collision_gas(state.gas_density, state.electron_temperature),
         )
         return gx, gy
 

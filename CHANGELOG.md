@@ -22,21 +22,27 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   temperature, a fixed point; illustrative deuterium placeholders that warn.
 - `DriftFluid2D` (`wellbalanced.driftfluid2d`): a 2D axial-azimuthal drift-fluid model of a
   magnetron (magnetised electrons with the Hall tensor, inertial ions, neutral depletion
-  and refill, electron energy, semi-implicit Poisson, SSP-RK3) for the gradient-drift
-  instability and spokes; well-balanced `external_sources`, the local dispersion relation
-  `gradient_drift_roots`, and spoke diagnostics (`spoke_report`, `fit_mode`).
-- `Magnetron` (`wellbalanced.magnetron`): a global model of the ionization region of a
-  (HiPIMS) magnetron with Ar, a sputtered metal (table of Al, Cr, Cu, Ti, Au, Mo, Nb),
-  ionization from the Lieberman and Lichtenberg argon fits and the Lotz approximation,
-  sputtering and self-sputtering by the Bohm ion flux to the target, argon refill and
-  sputter wind; driven by the discharge current and voltage (dc or pulse), with a fit of
-  the heating fraction, `current_scan` and pulses to a periodic state, and the spoke
-  diagnostics (rarefaction, metal to argon ratio, metal share of the ion flux,
-  self-sputtering share). Yields, geometry and heating are placeholders that warn.
-- `GlobalModel`: a `VolumeSource` rate that depends on the temperatures, `power` as a
-  function of the time, `evolve` (the balances integrated in time, with breakpoints at
-  the edges of a pulse) and `thermalize_electrons` (no cooling below the gas in an
-  afterglow).
+  and refill, the electron energy with elastic, ionization and excitation losses
+  (implicit), full Poisson with an implicit permittivity, SSP-RK3) for the gradient-drift
+  instability and spokes. Well-balanced `external_sources`, a prescribed cathode
+  current (`cathode_current_density`, Boeuf's condition: a fixed `gamma` avalanches when
+  `gamma M >= 1`), energy-dependent argon rates bounded to 0.5-100 eV (placeholders),
+  `periodic_x`/`field_bc` for uniform-plasma tests against `uniform_plasma_roots` (the
+  full-Poisson local dispersion relation) and `gradient_drift_roots`, and spoke
+  diagnostics (`spoke_report`, `fit_mode`), and `linear_modes`: the x-resolved Jacobian of the
+  discretised operator about a y-uniform state, per azimuthal mode, with switches that freeze the
+  T_e, ionization or gas response (checked against the dispersion relation and a time-domain run).
+  Diagnostic switches: `diamagnetic`, `heating_scale`, `anode_thermal_flux` (off: it does not
+  settle), and `floor_added`, the density the floors create.
+- `GasDynamics` (`wellbalanced.gasdynamics`): a two-species (argon and sputtered metal)
+  compressible neutral gas in 1D or 2D (axial and periodic azimuthal): MUSCL and HLLC with
+  SSP-RK3, the diffusion of the metal through the argon and optional heat conduction
+  applied implicitly, boundaries (walls, a fill-gas reservoir, outflow, periodic) that emit
+  sputtered atoms with a given energy, return neutralized ions, take up sticking metal and
+  exchange heat with the wall, volume sources, loss frequencies (ionization), exchange with
+  the plasma ions and cooling by unresolved walls, all plain inputs a plasma model can
+  update between steps. A budget of what boundaries and sources bring in closes the
+  conservation to rounding. The continuum limit: at 1 Pa the Knudsen number is of order 1.
 - `to_dataset()` on every result and `stack` for scans: labelled xarray datasets.
 - Examples (an argon global model, a 1D argon discharge, a neutralizer scan), plotted with
   plasma-plots, and a tutorial.

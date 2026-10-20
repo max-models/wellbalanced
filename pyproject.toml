@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
   "numpy",
-  "plasmacoll @ git+https://github.com/max-models/plasmacoll@devel",
+  "plasmacoll>=0.2.0",
   "scipy",
   "xarray",
 ]
@@ -36,7 +36,7 @@ optional-dependencies.dev = [
 ]
 optional-dependencies.docs = [
   "griffe",
-  "plasma-plots @ git+https://github.com/max-models/plasma-plots@devel",
+  "plasma-plots>=0.2.2",
   "ipykernel",
   "matplotlib>=3.10.9",
   "nbclient>=0.11",

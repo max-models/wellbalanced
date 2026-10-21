@@ -2180,6 +2180,22 @@ wheels = [
 ]
 
 [[package]]
+name = "mpiarray"
+version = "0.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cunumpy" },
+    { name = "maybempi" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/76/e4/9f8632135b51164cff135d2ddc4416c524880e8415ab2453dd32d102c606/mpiarray-0.2.1.tar.gz", hash = "sha256:276c271e3cb4d924914241ab529af2c344c3e8723f42155467ecdaaa5fbc6251", size = 118387, upload-time = "2026-10-20T19:33:30.567Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6a/76/9c6ac949128e00729fd3c78f2bd2c31884e0e1be52d3a05f6684ada6e76d/mpiarray-0.2.1-py3-none-any.whl", hash = "sha256:0725bf47c40bbf0051eea386298743c0af9e6f5b3b4f03750a7a58b8f32cc300", size = 135704, upload-time = "2026-10-20T19:33:28.639Z" },
+]
+
+[[package]]
 name = "nbclient"
 version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3808,6 +3824,23 @@ wheels = [
 ]
 
 [[package]]
+name = "simgeometry"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cunumpy" },
+    { name = "maybempi" },
+    { name = "mpiarray" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/29/4b/eaa988cab37b0e61e108e0eb64f2ab0566629f0bdd969a1d11e774801c3e/simgeometry-0.1.1.tar.gz", hash = "sha256:f9cbc6cdc964912934f38a2f982e7be7cf5cd5af171792ccfb325e2f478bbdab", size = 73150, upload-time = "2026-10-20T19:54:23.052Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/40/bf/08380619e38b5351bb288a362f3cb39c69e2573456e597622337144c76b6/simgeometry-0.1.1-py3-none-any.whl", hash = "sha256:d5fb60428d380d7c4b2aead81856497485de412b2673ad8d66b82702986f747d", size = 100551, upload-time = "2026-10-20T19:54:21.418Z" },
+]
+
+[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4073,6 +4106,7 @@ dependencies = [
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "simgeometry" },
     { name = "xarray", version = "2025.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "xarray", version = "2026.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
@@ -4128,6 +4162,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'test'" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "scipy" },
+    { name = "simgeometry", specifier = ">=0.1.1" },
     { name = "wellbalanced", extras = ["docs", "test"], marker = "extra == 'dev'" },
     { name = "xarray" },
 ]

@@ -7,6 +7,15 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `InductiveField2D` (`wellbalanced.inductive`): the magnetoquasistatic `A_z` of coil
+  windings, grounded or floating perfect conductors and a prescribed cold plasma
+  (`sigma = n_e e^2 / (m_e (nu + i omega))`) in a 2D Cartesian cut, on stretched
+  tensor-product grids; time-harmonic (`solve`, one sparse LU per frequency) and
+  time-dependent (`time_stepper`, trapezoidal, its steady state the harmonic solution at
+  the modified frequency); fields, absorbed and delivered power (equal to round-off), the
+  coil current for a power, the plasma resistance and the RF power transfer efficiency.
+  Example `rf_driver_inductive_field_2d.py` on the geometry of Zielke et al. (NIBS'22).
+  simgeometry is now a dependency (the shapes of windings and conductors).
 - `GlobalModel`: volume-averaged balances of every species, the electron energy and
   optionally the gas temperature; Bohm wall losses with an edge-to-centre ratio and
   magnetic cusps, neutral wall reactions, feed, pumping and volume sources; steady states

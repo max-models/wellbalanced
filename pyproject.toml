@@ -76,3 +76,9 @@ ini_options.addopts = "-ra"
 run.omit = [ "*/tests/*" ]
 run.source = [ "wellbalanced" ]
 report.show_missing = true
+
+# PRs to devel test against the devel branches of the max-models packages (pinned in
+# uv.lock); PRs to main and the release use PyPI only (CI sets UV_NO_SOURCES).
+[tool.uv.sources]
+plasma-plots = { git = "https://github.com/max-models/plasma-plots", branch = "devel" }
+plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "devel" }

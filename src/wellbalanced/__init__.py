@@ -14,8 +14,15 @@ boundaries that can be changed between steps.
 :class:`GasDynamics` is the neutral gas of a sputtering magnetron, argon and the sputtered
 metal as one compressible gas in one or two dimensions (its boundaries and sources are in
 :mod:`wellbalanced.gasdynamics`).
+
+The solves, time steps and runs carry scope-profiler regions tagged ``"wellbalanced"``,
+an opt-in tag: they record nothing unless an application enables it, e.g. with
+``scope_profiler.setup(enable_tags=["wellbalanced"])``.
 """
 
+import scope_profiler
+
+from wellbalanced._profiling import _PROFILE_TAGS
 from wellbalanced.datasets import stack
 from wellbalanced.driftfluid2d import (
     DriftFluid2D,
@@ -43,6 +50,8 @@ from wellbalanced.global_model import (
 from wellbalanced.magnetron import MATERIALS, Magnetron, TargetMaterial
 from wellbalanced.reactions import Reaction
 from wellbalanced.species import ELECTRON, Species
+
+scope_profiler.register_opt_in_tag(*_PROFILE_TAGS)
 
 __version__ = "0.1.0"
 

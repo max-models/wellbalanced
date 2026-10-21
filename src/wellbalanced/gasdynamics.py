@@ -88,7 +88,9 @@ from dataclasses import dataclass
 import numpy as np
 import xarray as xr
 from plasmacoll.constants import ATOMIC_MASS, BOLTZMANN, ELEMENTARY_CHARGE
+from scope_profiler import profile, region
 
+from wellbalanced._profiling import _PROFILE_TAGS
 from wellbalanced.datasets import variable
 
 __all__ = [
@@ -1116,6 +1118,7 @@ class GasDynamics:
 
     # -- stepping -----------------------------------------------------------------------
 
+    @profile("wellbalanced.GasDynamics.step", tags=_PROFILE_TAGS)
     def step(self, dt: float | None = None) -> float:
         """Advance one step (the stable step by default); returns the step taken."""
         self._check_ready()
@@ -1139,6 +1142,7 @@ class GasDynamics:
         for name, value in zip(QUANTITIES, amount, strict=True):
             self.budget[name] += float(value)
 
+    @profile("wellbalanced.GasDynamics.run", tags=_PROFILE_TAGS)
     def run(
         self,
         t_end: float,
@@ -1176,26 +1180,30 @@ class GasDynamics:
         Raises:
             RuntimeError: If ``max_time`` is reached first.
         """
-        self._check_ready()
-        reference = self._u[:2].copy()
-        t_reference = self.time
-        while self.time < max_time:
-            for _ in range(check_every):
-                self.step()
-            scale = np.maximum(np.abs(self._u[:2]), 1.0e-6 * np.abs(self._u[:2]).max())
-            change = np.max(np.abs(self._u[:2] - reference) / scale)
-            sound = float(
-                np.sqrt(
-                    self.gamma
-                    * self._primitive(self._u)[4].max()
-                    / (self._u[0] + self._u[1]).min()
+        # not @profile: its wrapper frames would shift the warning's stacklevel
+        with region("wellbalanced.GasDynamics.steady_state", tags=_PROFILE_TAGS):
+            self._check_ready()
+            reference = self._u[:2].copy()
+            t_reference = self.time
+            while self.time < max_time:
+                for _ in range(check_every):
+                    self.step()
+                scale = np.maximum(
+                    np.abs(self._u[:2]), 1.0e-6 * np.abs(self._u[:2]).max()
                 )
-            )
-            if (
-                change / max(self.time - t_reference, 1e-300) * self.length / sound
-                < tolerance
-            ):
-                return self.state()
-            reference, t_reference = self._u[:2].copy(), self.time
-        warnings.warn("steady_state reached max_time", RuntimeWarning, stacklevel=2)
-        return self.state()
+                change = np.max(np.abs(self._u[:2] - reference) / scale)
+                sound = float(
+                    np.sqrt(
+                        self.gamma
+                        * self._primitive(self._u)[4].max()
+                        / (self._u[0] + self._u[1]).min()
+                    )
+                )
+                if (
+                    change / max(self.time - t_reference, 1e-300) * self.length / sound
+                    < tolerance
+                ):
+                    return self.state()
+                reference, t_reference = self._u[:2].copy(), self.time
+            warnings.warn("steady_state reached max_time", RuntimeWarning, stacklevel=2)
+            return self.state()

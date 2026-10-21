@@ -43,7 +43,9 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import xarray as xr
 from plasmacoll.constants import ELEMENTARY_CHARGE
+from scope_profiler import profile
 
+from wellbalanced._profiling import _PROFILE_TAGS
 from wellbalanced.datasets import variable
 from wellbalanced.reactions import Reaction
 from wellbalanced.species import Species
@@ -609,6 +611,7 @@ class Fluid1D:
             shape=(size, size),
         )
 
+    @profile("wellbalanced.Fluid1D.newton", tags=_PROFILE_TAGS)
     def _newton(self, unknowns, previous, dt, max_iterations: int = 30):
         """Solve the (backward Euler or steady) equations; return the solution and success."""
         u = unknowns.copy()
@@ -659,6 +662,7 @@ class Fluid1D:
                     raise RuntimeError("the time step fell below 1e-6 of the duration")
         return u
 
+    @profile("wellbalanced.Fluid1D.steady_state", tags=_PROFILE_TAGS)
     def steady_state(
         self,
         unknowns: np.ndarray,

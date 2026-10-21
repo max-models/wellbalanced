@@ -46,6 +46,10 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `to_dataset()` on every result and `stack` for scans: labelled xarray datasets.
 - Examples (an argon global model, a 1D argon discharge, a neutralizer scan), plotted with
   plasma-plots, and a tutorial.
+- Opt-in scope-profiler regions (`wellbalanced.<Class>.<method>`) on the solves, time
+  steps and runs of every model, tagged `wellbalanced`: off unless an application enables
+  the tag (`setup(enable_tags=["wellbalanced"])`, `SCOPE_PROFILER_ENABLE_TAGS` or
+  `scope-profiler run --enable-tag`). scope-profiler is a new dependency.
 
 ### Removed
 

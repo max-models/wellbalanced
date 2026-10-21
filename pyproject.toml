@@ -23,6 +23,7 @@ classifiers = [
 dependencies = [
   "numpy",
   "plasmacoll>=0.2.0",
+  "scope-profiler>=0.7.5",
   "scipy",
   "xarray",
 ]
@@ -44,6 +45,9 @@ optional-dependencies.docs = [
 ]
 optional-dependencies.test = [ "pytest", "pytest-cov" ]
 urls.Source = "https://github.com/max-models/wellbalanced"
+
+[tool.uv.sources]
+scope-profiler = { git = "https://github.com/max-models/scope-profiler", branch = "devel" }
 
 [tool.setuptools]
 package-data."*" = [ "py.typed" ]

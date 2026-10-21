@@ -25,6 +25,7 @@ dependencies = [
   "plasmacoll>=0.2.0",
   "scope-profiler>=0.7.5",
   "scipy",
+  "simgeometry>=0.1.1",
   "xarray",
 ]
 optional-dependencies.dev = [

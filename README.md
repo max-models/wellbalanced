@@ -49,6 +49,13 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   fast beam’s charge states on the gas and on the plasma it makes,
   coupled to a global model of the channel fed by the beam’s stripped
   and secondary electrons, iterated to a fixed point in seconds.
+- **The inductive RF field of a driver** (`InductiveField2D`,
+  `wellbalanced.inductive`): the magnetoquasistatic vector potential of
+  coil windings, perfect conductors (backplates, electromagnetic
+  shields) and a prescribed cold plasma in a 2D Cartesian cut,
+  time-harmonic or time-dependent; the absorbed power, the coil current
+  for a given power and the RF power transfer efficiency. The field part
+  of an RF-driver model; the plasma is an input.
 - **The data of the kinetic codes**: rates come from
   [plasmacoll](https://github.com/max-models/plasmacoll)’s cross
   sections averaged over a Maxwellian, the data its Monte Carlo

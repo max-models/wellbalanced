@@ -2240,6 +2240,22 @@ wheels = [
 ]
 
 [[package]]
+name = "mpiarray"
+version = "0.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cunumpy" },
+    { name = "maybempi" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/76/e4/9f8632135b51164cff135d2ddc4416c524880e8415ab2453dd32d102c606/mpiarray-0.2.1.tar.gz", hash = "sha256:276c271e3cb4d924914241ab529af2c344c3e8723f42155467ecdaaa5fbc6251", size = 118387, upload-time = "2026-10-20T19:33:30.567Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6a/76/9c6ac949128e00729fd3c78f2bd2c31884e0e1be52d3a05f6684ada6e76d/mpiarray-0.2.1-py3-none-any.whl", hash = "sha256:0725bf47c40bbf0051eea386298743c0af9e6f5b3b4f03750a7a58b8f32cc300", size = 135704, upload-time = "2026-10-20T19:33:28.639Z" },
+]
+
+[[package]]
 name = "nbclient"
 version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3868,8 +3884,8 @@ wheels = [
 
 [[package]]
 name = "scope-profiler"
-version = "0.7.4"
-source = { git = "https://github.com/max-models/scope-profiler?branch=devel#19f59c4ed98cf61ba6bd7c9244aee133983924b3" }
+version = "0.7.5"
+source = { git = "https://github.com/max-models/scope-profiler?branch=devel#2abb4ca4fe74166be554d30c3b78af8041f930ae" }
 dependencies = [
     { name = "h5py" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -3886,6 +3902,23 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c5/f0/184b4b5f8d00f2a92cf96eec8967a3d550b52cf94362dad1100df9e48d57/send2trash-2.1.0.tar.gz", hash = "sha256:1c72b39f09457db3c05ce1d19158c2cbef4c32b8bedd02c155e49282b7ea7459", size = 17255, upload-time = "2026-01-14T06:27:36.056Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1c/78/504fdd027da3b84ff1aecd9f6957e65f35134534ccc6da8628eb71e76d3f/send2trash-2.1.0-py3-none-any.whl", hash = "sha256:0da2f112e6d6bb22de6aa6daa7e144831a4febf2a87261451c4ad849fe9a873c", size = 17610, upload-time = "2026-01-14T06:27:35.218Z" },
+]
+
+[[package]]
+name = "simgeometry"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cunumpy" },
+    { name = "maybempi" },
+    { name = "mpiarray" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/29/4b/eaa988cab37b0e61e108e0eb64f2ab0566629f0bdd969a1d11e774801c3e/simgeometry-0.1.1.tar.gz", hash = "sha256:f9cbc6cdc964912934f38a2f982e7be7cf5cd5af171792ccfb325e2f478bbdab", size = 73150, upload-time = "2026-10-20T19:54:23.052Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/40/bf/08380619e38b5351bb288a362f3cb39c69e2573456e597622337144c76b6/simgeometry-0.1.1-py3-none-any.whl", hash = "sha256:d5fb60428d380d7c4b2aead81856497485de412b2673ad8d66b82702986f747d", size = 100551, upload-time = "2026-10-20T19:54:21.418Z" },
 ]
 
 [[package]]
@@ -4164,6 +4197,7 @@ dependencies = [
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "scope-profiler" },
+    { name = "simgeometry" },
     { name = "xarray", version = "2025.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "xarray", version = "2026.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
@@ -4220,6 +4254,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "scipy" },
     { name = "scope-profiler", git = "https://github.com/max-models/scope-profiler?branch=devel" },
+    { name = "simgeometry", specifier = ">=0.1.1" },
     { name = "wellbalanced", extras = ["docs", "test"], marker = "extra == 'dev'" },
     { name = "xarray" },
 ]

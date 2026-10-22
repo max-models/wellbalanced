@@ -81,13 +81,21 @@ NEWTON_TOLERANCE = 1.0e-10
 
 
 def _bernoulli(x: np.ndarray) -> np.ndarray:
-    """``x / (exp(x) - 1)``, with its limit 1 at 0."""
+    """``x / (exp(x) - 1)``, with its limit 1 at 0.
+
+    Near 0 its series to ``x^4``, exact to round-off below ``|x| = 1e-3``: a
+    shorter one (``1 - x / 2``) errs by ``x^2 / 12``, which the large
+    drift and diffusion terms of a fine mesh turn into noise in the residual,
+    and the noise into a wrong finite-difference Jacobian.
+    """
     x = np.asarray(x, dtype=float)
-    small = np.abs(x) < 1.0e-6
+    small = np.abs(x) < 1.0e-3
     safe = np.where(small, 1.0, x)
     with np.errstate(over="ignore"):
         value = safe / np.expm1(safe)
-    return np.where(small, 1.0 - 0.5 * x, value)
+    x2 = x * x
+    series = 1.0 - 0.5 * x + x2 / 12.0 - x2 * x2 / 720.0
+    return np.where(small, series, value)
 
 
 @dataclass(frozen=True)
@@ -724,10 +732,41 @@ class Fluid1D:
             out.append(np.asarray(rate, dtype=float))
         return out
 
+    def _scales(self, unknowns: np.ndarray) -> np.ndarray:
+        """Every equation's scale, from the sizes of the fields of ``unknowns``.
+
+        Newton's method holds them fixed while it iterates, so the residual of
+        a cell depends on its neighbours only and the Jacobian by colours is exact.
+        """
+        densities, te, _, _ = self._unpack(unknowns)
+        scales = np.ones(self._nvar)
+        for k, name in enumerate(self._names):
+            scales[k] = max(float(np.max(densities[name])), 1.0)
+        if self._energy:
+            w = 1.5 * densities["e"] * te
+            scales[len(self._names)] = max(float(np.max(w)), 1.0)
+        for fluid in self.species:
+            if fluid.momentum:
+                # the pressure gradient of 1 eV ions over the domain
+                size = max(float(np.max(densities[fluid.name])), 1.0)
+                scales[self._velocity_column[fluid.name]] = (
+                    size * (E / fluid.species.mass) / self.length
+                )
+        return scales
+
     def _residual(
-        self, unknowns: np.ndarray, previous: np.ndarray | None, dt: float
+        self,
+        unknowns: np.ndarray,
+        previous: np.ndarray | None,
+        dt: float,
+        scales: np.ndarray | None = None,
     ) -> np.ndarray:
-        """Backward Euler residual (``previous is None``: the steady equations)."""
+        """Backward Euler residual (``previous is None``: the steady equations).
+
+        ``scales`` divide the equations; by default those of ``unknowns``.
+        """
+        if scales is None:
+            scales = self._scales(unknowns)
         densities, te, phi, inner = self._unpack(unknowns)
         fluxes, efield = self._fluxes(densities, te, phi, inner)
         _, sources, loss, sinks = self._reactions(densities, te)
@@ -740,8 +779,7 @@ class Fluid1D:
             balance = divergence - sources[name]
             if old is not None:
                 balance = balance + (n - old[0][name]) / dt
-            scale = max(float(np.max(n)), 1.0)
-            res[:, k] = balance / scale
+            res[:, k] = balance / scales[k]
         if self._energy:
             n = densities["e"]
             w = 1.5 * n * te
@@ -753,19 +791,21 @@ class Fluid1D:
             if old is not None:
                 w_old = 1.5 * old[0]["e"] * old[1]
                 balance = balance + (w - w_old) / dt
-            res[:, len(self._names)] = balance / max(float(np.max(w)), 1.0)
+            res[:, len(self._names)] = balance / scales[len(self._names)]
         for fluid in self.species:
             if fluid.momentum:
                 column = self._velocity_column[fluid.name]
-                res[:-1, column] = self._momentum_residual(
-                    fluid,
-                    densities[fluid.name],
-                    fluxes[fluid.name],
-                    efield,
-                    sinks[fluid.name],
-                    te,
-                    None if old is None else old[3][fluid.name],
-                    dt,
+                res[:-1, column] = (
+                    self._momentum_residual(
+                        fluid,
+                        densities[fluid.name],
+                        fluxes[fluid.name],
+                        efield,
+                        sinks[fluid.name],
+                        None if old is None else old[3][fluid.name],
+                        dt,
+                    )
+                    / scales[column]
                 )
                 res[-1, column] = unknowns.reshape(self.cells, self._nvar)[-1, column]
         charge = sum(f.species.charge * densities[f.name] for f in self.species)
@@ -774,8 +814,8 @@ class Fluid1D:
         res[:, -1] = (laplacian + E * charge / EPSILON_0) * h * h
         return res.ravel()
 
-    def _momentum_residual(self, fluid, n, flux, efield, sink, te, old, dt):
-        """The momentum balance on the faces between cells, scaled."""
+    def _momentum_residual(self, fluid, n, flux, efield, sink, old, dt):
+        """The momentum balance on the faces between cells (m^-2 s^-2)."""
         h = self.h
         mass = fluid.species.mass
         tg = self.gas_temperature
@@ -805,24 +845,27 @@ class Fluid1D:
         )
         if old is not None:
             balance = balance + (inner - old) / dt
-        sound = E * (float(np.mean(te)) + tg) / mass
-        scale = max(float(np.max(n)), 1.0) * sound / self.length
-        return balance / scale
+        return balance
 
-    def _jacobian(self, unknowns: np.ndarray, previous, dt) -> sp.csc_matrix:
-        """The Jacobian by finite differences, three cells apart per evaluation."""
+    def _jacobian(
+        self, unknowns: np.ndarray, previous, dt, scales: np.ndarray | None = None
+    ) -> sp.csc_matrix:
+        """The Jacobian by central differences, three cells apart per evaluation."""
         nvar, cells = self._nvar, self.cells
-        base = self._residual(unknowns, previous, dt)
+        if scales is None:
+            scales = self._scales(unknowns)
         rows, cols, vals = [], [], []
         for k in range(nvar):
             for colour in range(3):
-                perturbed = unknowns.copy()
                 index = np.arange(colour, cells, 3) * nvar + k
-                step = 1.0e-7 * np.maximum(1.0, np.abs(unknowns[index]))
-                perturbed[index] += step
-                change = (self._residual(perturbed, previous, dt) - base).reshape(
-                    cells, nvar
-                )
+                step = 1.0e-6 * np.maximum(1.0, np.abs(unknowns[index]))
+                plus, minus = unknowns.copy(), unknowns.copy()
+                plus[index] += step
+                minus[index] -= step
+                change = 0.5 * (
+                    self._residual(plus, previous, dt, scales)
+                    - self._residual(minus, previous, dt, scales)
+                ).reshape(cells, nvar)
                 for offset in (-1, 0, 1):
                     target = np.arange(colour, cells, 3) + offset
                     ok = (target >= 0) & (target < cells)
@@ -848,9 +891,10 @@ class Fluid1D:
         log_columns[list(self._velocity_column.values())] = False  # velocities
         is_log = np.tile(log_columns, self.cells)
         linear = np.flatnonzero(~log_columns)
+        scales = self._scales(u)
         for _ in range(max_iterations):
-            residual = self._residual(u, previous, dt)
-            jacobian = self._jacobian(u, previous, dt)
+            residual = self._residual(u, previous, dt, scales)
+            jacobian = self._jacobian(u, previous, dt, scales)
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("error", spla.MatrixRankWarning)
@@ -866,9 +910,9 @@ class Fluid1D:
             # the potential and the velocities each converge relative to their own size
             columns = u.reshape(self.cells, self._nvar)[:, linear]
             changes = delta.reshape(self.cells, self._nvar)[:, linear]
-            scales = 1.0 + np.max(np.abs(columns), axis=0)
+            sizes = 1.0 + np.max(np.abs(columns), axis=0)
             if np.max(np.abs(delta[is_log])) < NEWTON_TOLERANCE and np.all(
-                np.max(np.abs(changes), axis=0) < NEWTON_TOLERANCE * scales
+                np.max(np.abs(changes), axis=0) < NEWTON_TOLERANCE * sizes
             ):
                 return u, True
         return u, False

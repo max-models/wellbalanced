@@ -60,13 +60,11 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   global model’s, for now) at a set absorbed or generator power. The
   field part of an RF-driver model; the plasma’s shape is an input until
   `Fluid2D`. Shapes come from simgeometry
-  (`pip install "wellbalanced[spatial]"`). On a tensor grid stretched
-  toward the far boundary, or on refined patches (`PatchGrid`, on
-  [patchwork](https://github.com/max-models/patchwork), installed from
-  git:
-  `pip install "patchwork @ git+https://github.com/max-models/patchwork@devel"`):
-  a coarse base out to the far boundary and fine patches only over the
-  coil and the skin layer.
+  (`pip install "wellbalanced[spatial]"`, which also installs
+  [patchwork](https://github.com/max-models/patchwork), on PyPI as
+  `patchwork-amr`). On a tensor grid stretched toward the far boundary,
+  or on refined patches (`PatchGrid`): a coarse base out to the far
+  boundary and fine patches only over the coil and the skin layer.
 - **A 0D RF driver** (`RFDriver`, `wellbalanced.driver`): the global
   model of the driver plasma coupled to a transformer model of the coil,
   giving the coil current and the RF power transfer efficiency against

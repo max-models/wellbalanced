@@ -7,6 +7,15 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `RFDriver` (`wellbalanced.driver`): a 0D RF driver, the `GlobalModel` of its plasma
+  coupled to a transformer model of the coil (Piejak, Godyak and Alexandrovich 1992;
+  Lieberman and Lichtenberg sec. 12.2) with the cold collisional plasma's complex skin
+  depth, so the collisional and the electron-inertia limits are one expression; Nagaoka's
+  coefficient for the short coil; the exact uniform column in a long solenoid
+  (`solenoid_impedance`) as an alternative coupling. The coil current, coil voltage, RF
+  power and RF power transfer efficiency for an absorbed power, and scans over the power,
+  frequency or geometry in seconds. `illustrative_hydrogen_driver` (BUG geometry, H2 at
+  0.3 Pa) runs on placeholder rates and warns. Example `rf_driver_0d.py`.
 - `InductiveField2D` (`wellbalanced.inductive`): the magnetoquasistatic `A_z` of coil
   windings, grounded or floating perfect conductors and a prescribed cold plasma
   (`sigma = n_e e^2 / (m_e (nu + i omega))`) in a 2D Cartesian cut, on stretched

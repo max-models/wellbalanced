@@ -16,7 +16,9 @@ metal as one compressible gas in one or two dimensions (its boundaries and sourc
 :mod:`wellbalanced.gasdynamics`).
 
 :class:`InductiveField2D` is the inductive RF field of coil windings, conductors and a
-prescribed plasma in a 2D cut (:mod:`wellbalanced.inductive`).
+prescribed plasma in a 2D cut (:mod:`wellbalanced.inductive`). :class:`RFDriver` is a 0D
+RF driver: a global model of its plasma and a transformer model of the coil's coupling,
+giving the coil current and the RF power transfer efficiency (:mod:`wellbalanced.driver`).
 
 The solves, time steps and runs carry scope-profiler regions tagged ``"wellbalanced"``,
 an opt-in tag: they record nothing unless an application enables it, e.g. with
@@ -33,6 +35,7 @@ from wellbalanced.driftfluid2d import (
     SpokeReport,
     spoke_report,
 )
+from wellbalanced.driver import Coil, DriverState, RFDriver
 from wellbalanced.fluid1d import (
     Boundary,
     Fluid1D,
@@ -68,10 +71,12 @@ __all__ = [
     "ELECTRON",
     "Boundary",
     "Chamber",
+    "Coil",
     "Conductor",
     "Cusp",
     "DriftFluid2D",
     "DriftFluid2DState",
+    "DriverState",
     "Fluid1D",
     "FluidSpecies",
     "FluidState",
@@ -85,6 +90,7 @@ __all__ = [
     "MATERIALS",
     "Magnetron",
     "PotentialBoundary",
+    "RFDriver",
     "Reaction",
     "Species",
     "SpokeReport",

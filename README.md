@@ -48,7 +48,12 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
 - **A beam-driven plasma neutralizer** (`wellbalanced.neutralizer`): a
   fast beam’s charge states on the gas and on the plasma it makes,
   coupled to a global model of the channel fed by the beam’s stripped
-  and secondary electrons, iterated to a fixed point in seconds.
+  and secondary electrons, iterated to a fixed point in seconds. The
+  beam’s sources are functions of its local flux, energy and charge
+  states, with cross sections that may depend on the energy and
+  secondary electrons of the mean energy of their distribution
+  (e.g. Rudd’s, from plasmacoll); the same sources drive a `Fluid1D`
+  across the channel.
 - **The inductive RF field of a driver** (`InductiveField2D`,
   `wellbalanced.spatial`): the magnetoquasistatic vector potential of
   coil windings, perfect conductors (backplates, electromagnetic

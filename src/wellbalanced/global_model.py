@@ -168,18 +168,19 @@ class VolumeSource:
     ``rate`` may be a function of the electron and gas temperatures in eV,
     ``rate(T_e, T_g)``, for a source that follows the plasma, e.g. sputtering
     by the ion flux to a target (``per = ("Ar+",)``, ``rate`` the Bohm flux
-    times the yield per volume).
+    times the yield per volume). In a :class:`~wellbalanced.Fluid1D` it may
+    also be an array on the cells, a source that varies in space.
     """
 
     changes: Mapping[str, int]
-    rate: float | Callable[[float, float], float]
+    rate: float | np.ndarray | Callable[[float, float], float]
     per: Sequence[str] = ()
     electron_energy: float = 0.0
     name: str = "source"
 
     def __post_init__(self) -> None:
         """Validate the source."""
-        if not callable(self.rate) and self.rate < 0.0:
+        if not callable(self.rate) and np.any(np.asarray(self.rate) < 0.0):
             raise ValueError("a source rate must be >= 0")
         object.__setattr__(self, "changes", dict(self.changes))
         object.__setattr__(self, "per", tuple(self.per))
@@ -188,7 +189,9 @@ class VolumeSource:
         """Return ``rate`` at the temperatures (eV)."""
         if callable(self.rate):
             return float(self.rate(electron_temperature, gas_temperature))
-        return float(self.rate)
+        if np.ndim(self.rate) and np.size(self.rate) > 1:
+            raise ValueError(f"{self.name}: a rate on cells is for a 1D model")
+        return float(np.asarray(self.rate).reshape(-1)[0])
 
 
 @dataclass(frozen=True)

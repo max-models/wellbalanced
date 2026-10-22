@@ -17,14 +17,21 @@ ionization of the gas by a fast particle feeds the plasma, which a
 - a capture from the gas (``+ -> 0``, ``0 -> -``) ionizes a gas molecule
   (the electron goes to the beam);
 - the ionization of the gas by a fast particle of state ``s`` (cross section
-  ``gas_ionization[s]``) makes an ion and a slow secondary electron of mean
-  energy ``secondary_energy``.
+  ``gas_ionization[s]``) makes an ion and a secondary electron of mean
+  energy ``secondary_energy[s]``: the mean of its energy distribution, e.g.
+  Rudd's (:class:`plasmacoll.RuddIonization`), at the beam's energy.
 
-With ``N`` beam particles per second, the volume rate of a process of cross
-section ``sigma`` on a target of density ``n`` is ``N F_s n sigma / (w h)``,
-with ``F_s`` the fraction of the incident state averaged along the channel: a
-:class:`~wellbalanced.VolumeSource` per unit target density, so the global model
-treats it self-consistently with its own gas and electron densities. The gas
+The sources are functions of the local beam (:meth:`Neutralizer.beam_sources`):
+with a particle flux ``Gamma`` (beam particles per m^2 and s), the fractions
+``F_s`` of its states and its energy ``E``, a process of cross section
+``sigma(E)`` on a target of density ``n`` happens at the volume rate
+``Gamma F_s sigma(E) n``: a :class:`~wellbalanced.VolumeSource` per unit target
+density, so a model treats it self-consistently with its own gas and electron
+densities. The global model takes them with the beam's mean flux
+``N / (w h)`` (``N`` particles per second) and the fractions averaged along the
+channel; a :class:`~wellbalanced.Fluid1D` takes them with profiles across the
+channel. The cross sections are numbers at the beam's energy
+(:class:`BeamData`) or functions of it (:class:`BeamCrossSections`). The gas
 is fed at ``gas_inflow`` and leaves through the two open ends of the channel at
 the free-molecular rate ``2 T (v_mean / 4) w h`` (transmission ``T``), with the
 mean speed at the current gas temperature: gas heating lowers the density.
@@ -41,9 +48,9 @@ from __future__ import annotations
 
 import dataclasses
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 import xarray as xr
@@ -66,10 +73,12 @@ from wellbalanced.reactions import Reaction
 from wellbalanced.species import ELECTRON, Species
 
 __all__ = [
+    "BeamCrossSections",
     "BeamData",
     "FastBeam",
     "Neutralizer",
     "NeutralizerResult",
+    "SecondaryElectrons",
     "illustrative_deuterium_neutralizer",
 ]
 
@@ -112,6 +121,27 @@ class FastBeam:
         return ELECTRON_MASS / self.mass * self.energy
 
 
+@runtime_checkable
+class SecondaryElectrons(Protocol):
+    """Ionization of the gas by a fast particle, with its secondary electrons' energies.
+
+    :class:`plasmacoll.RuddIonization` is one.
+    """
+
+    def total(self, projectile_energy: float) -> float:
+        """The ionization cross section (m^2) at the projectile's energy (eV)."""
+        ...
+
+    def mean_energy(self, projectile_energy: float) -> float:
+        """The mean energy (eV) of the secondary electrons."""
+        ...
+
+
+#: A cross section (m^2) as a function of the beam energy (eV), e.g. a
+#: :class:`plasmacoll.CrossSection` in the lab frame.
+CrossSectionFunction = Callable[[np.ndarray], Any]
+
+
 @dataclass(frozen=True)
 class BeamData:
     """The beam's cross sections at its energy (m^2).
@@ -119,10 +149,14 @@ class BeamData:
     Attributes:
         transitions: Charge changes on the targets ``"gas"`` and ``"plasma"``.
         gas_ionization: Cross section for ionizing the gas, per beam state.
+        secondary_energy: Mean energy (eV) of the secondary electrons of gas
+            ionization, per beam state; the neutralizer's ``secondary_energy``
+            for a state missing here.
     """
 
     transitions: ChargeStateTransitions
     gas_ionization: Mapping[str, float] = field(default_factory=dict)
+    secondary_energy: Mapping[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate the targets and states."""
@@ -134,6 +168,61 @@ class BeamData:
         if set(self.transitions.states) - set(STATE_CHARGES):
             raise ValueError(f"beam states must be among {tuple(STATE_CHARGES)}")
         object.__setattr__(self, "gas_ionization", dict(self.gas_ionization))
+        object.__setattr__(self, "secondary_energy", dict(self.secondary_energy))
+        if any(e < 0.0 for e in self.secondary_energy.values()):
+            raise ValueError("secondary energies must be >= 0")
+
+
+@dataclass(frozen=True)
+class BeamCrossSections:
+    """The beam's cross sections as functions of its energy; :meth:`at` gives :class:`BeamData`.
+
+    Every cross section is a number (m^2) or a function of the beam energy
+    (eV), e.g. a :class:`plasmacoll.CrossSection` tabulated in the lab frame.
+    The gas ionization may be a :class:`SecondaryElectrons` instead, such as
+    :class:`plasmacoll.RuddIonization` with the beam particle's mass: then the
+    secondary electrons' mean energy follows the beam energy too.
+
+    Attributes:
+        transitions: ``{target: {(from_state, to_state): sigma}}``, targets
+            ``"gas"`` and ``"plasma"``.
+        gas_ionization: Ionization of the gas, per beam state.
+        states: The charge states, in the order of the fractions.
+    """
+
+    transitions: Mapping[str, Mapping[tuple[str, str], float | CrossSectionFunction]]
+    gas_ionization: Mapping[str, float | CrossSectionFunction | SecondaryElectrons] = (
+        field(default_factory=dict)
+    )
+    states: Sequence[str] = ("-", "0", "+")
+
+    def at(self, energy: float) -> BeamData:
+        """The cross sections at the beam energy ``energy`` (eV)."""
+        if energy <= 0.0:
+            raise ValueError("the beam energy must be > 0")
+        transitions = {
+            target: {pair: _evaluate(sigma, energy) for pair, sigma in table.items()}
+            for target, table in self.transitions.items()
+        }
+        ionization, secondaries = {}, {}
+        for state, value in self.gas_ionization.items():
+            if isinstance(value, SecondaryElectrons):
+                ionization[state] = float(value.total(energy))
+                secondaries[state] = float(value.mean_energy(energy))
+            else:
+                ionization[state] = _evaluate(value, energy)
+        return BeamData(
+            ChargeStateTransitions(transitions, tuple(self.states)),
+            ionization,
+            secondaries,
+        )
+
+
+def _evaluate(sigma: float | CrossSectionFunction, energy: float) -> float:
+    """A cross section (m^2) at the beam energy (eV): a number, or a function of it."""
+    if callable(sigma):
+        return float(np.asarray(sigma(np.array([energy]))).reshape(-1)[0])
+    return float(sigma)
 
 
 @dataclass
@@ -213,7 +302,7 @@ class Neutralizer:
         width: Channel width (m).
         height: Channel height (m).
         beam: The incoming beam.
-        data: The beam's cross sections.
+        data: The beam's cross sections, at its energy or as functions of it.
         species: The plasma and gas species, the electrons included.
         reactions: The plasma's volume reactions.
         gas: The name of the fed gas.
@@ -230,7 +319,8 @@ class Neutralizer:
         wall_reactions: Neutral losses at the walls.
         ion_wall_products: What an ion returns from the wall.
         fast_electron_deposition: Share of the fast electrons' energy the plasma keeps.
-        secondary_energy: Mean energy (eV) of a secondary electron of gas ionization.
+        secondary_energy: Mean energy (eV) of a secondary electron of gas
+            ionization, for the beam states whose data give none.
         points: Points along the channel for the beam fractions.
         relaxation: Under-relaxation of the beam fractions between iterations.
         tolerance: Convergence of the fixed point (largest change of a fraction).
@@ -241,7 +331,7 @@ class Neutralizer:
     width: float
     height: float
     beam: FastBeam
-    data: BeamData
+    data: BeamData | BeamCrossSections
     species: Sequence[Species]
     reactions: Sequence[Reaction]
     gas: str
@@ -303,34 +393,85 @@ class Neutralizer:
 
     # -- the beam -------------------------------------------------------------------
 
+    def beam_data(self, energy: float | None = None) -> BeamData:
+        """The beam's cross sections at ``energy`` (eV; the beam's by default)."""
+        if isinstance(self.data, BeamData):
+            if energy is not None and energy != self.beam.energy:
+                raise ValueError(
+                    "BeamData holds the cross sections at the beam's energy; "
+                    "use BeamCrossSections for others"
+                )
+            return self.data
+        return self.data.at(self.beam.energy if energy is None else energy)
+
+    @property
+    def mean_flux(self) -> float:
+        """The beam's particle flux (m^-2 s^-1) averaged over the cross section."""
+        return self.beam.particle_rate / self.cross_section
+
     def fractions(
         self, gas_density: float, plasma_density: float
     ) -> tuple[np.ndarray, np.ndarray]:
         """The positions along the channel and the beam's fractions there."""
+        transitions = self.beam_data().transitions
         z = np.linspace(0.0, self.length, self.points)
         line = {"gas": gas_density * z}
-        if "plasma" in self.data.transitions.targets:
+        if "plasma" in transitions.targets:
             line["plasma"] = plasma_density * z
-        line = {t: v for t, v in line.items() if t in self.data.transitions.targets}
-        fractions = charge_state_fractions(
-            self.data.transitions, line, initial=self.beam.initial
-        )
+        line = {t: v for t, v in line.items() if t in transitions.targets}
+        fractions = charge_state_fractions(transitions, line, initial=self.beam.initial)
         return z, fractions
 
     def _sources(self, mean: np.ndarray) -> list[VolumeSource]:
         """The beam's sources for the plasma, with the fractions averaged along the channel."""
-        states = self.data.transitions.states
-        rate = self.beam.particle_rate / self.cross_section  # per unit length, per area
-        fast = self.beam.stripped_electron_energy * self.fast_electron_deposition
+        return self.beam_sources(self.mean_flux, mean)
+
+    def beam_sources(
+        self,
+        flux: float | np.ndarray,
+        fractions: Sequence[float] | np.ndarray,
+        energy: float | None = None,
+    ) -> list[VolumeSource]:
+        """The beam's sources for the plasma where the beam is ``flux``, ``fractions``, ``energy``.
+
+        Args:
+            flux: Beam particles per m^2 and s, all states together: a number,
+                or an array along a coordinate (the cells of a
+                :class:`~wellbalanced.Fluid1D`).
+            fractions: The fractions of the states (in the order of the data's
+                states), ``(states,)`` or ``(points, states)`` with ``points``
+                matching ``flux``.
+            energy: The beam energy in eV, the incoming beam's by default.
+
+        Returns:
+            One :class:`~wellbalanced.VolumeSource` per process, its rate per
+            unit density of its target (a number, or an array like ``flux``).
+        """
+        energy = self.beam.energy if energy is None else float(energy)
+        data = self.beam_data(energy)
+        states = data.transitions.states
+        shares = np.asarray(fractions, dtype=float)
+        if shares.shape[-1] != len(states):
+            raise ValueError(f"fractions need one value per state {tuple(states)}")
+        rate = np.asarray(flux, dtype=float)
+        if np.any(rate < 0.0) or np.any(shares < 0.0):
+            raise ValueError("flux and fractions must be >= 0")
+        # the energy of an electron moving with the beam, (m_e / M) E
+        stripped = ELECTRON_MASS / self.beam.mass * energy
+        fast = stripped * self.fast_electron_deposition
         # every neutral that is a gas target: (name, weight, the ion the beam makes)
         gases = [(self.gas, 1.0, self.gas_ion)] + [
             (name, weight, ion) for name, (weight, ion) in self.atoms.items()
         ]
         sources = []
-        for target, table in self.data.transitions.cross_sections.items():
+
+        def coefficient(state: str, sigma: float) -> float | np.ndarray:
+            value = rate * shares[..., states.index(state)] * sigma
+            return float(value) if value.ndim == 0 else value
+
+        for target, table in data.transitions.cross_sections.items():
             for (start, end), sigma in table.items():
-                share = float(mean[states.index(start)])
-                if sigma <= 0.0 or share <= 0.0:
+                if sigma <= 0.0 or not np.any(shares[..., states.index(start)] > 0.0):
                     continue
                 freed = STATE_CHARGES[end] - STATE_CHARGES[start]
                 name = f"beam {start}->{end} on {target}"
@@ -339,7 +480,7 @@ class Neutralizer:
                         sources.append(
                             VolumeSource(
                                 {"e": freed},
-                                rate * share * sigma,
+                                coefficient(start, sigma),
                                 per=("e",),
                                 electron_energy=freed * fast,
                                 name=name,
@@ -347,27 +488,26 @@ class Neutralizer:
                         )
                     continue
                 for gas, weight, ion in gases:
-                    coefficient = rate * share * sigma * weight
                     label = name if gas == self.gas else f"{name} ({gas})"
                     if freed > 0:
                         changes = {"e": freed}
-                        energy = freed * fast
+                        gained = freed * fast
                     else:  # a capture ionizes the target
                         changes = {gas: freed, ion: -freed}
-                        energy = 0.0
+                        gained = 0.0
                     sources.append(
                         VolumeSource(
                             changes,
-                            coefficient,
+                            coefficient(start, sigma * weight),
                             per=(gas,),
-                            electron_energy=energy,
+                            electron_energy=gained,
                             name=label,
                         )
                     )
-        for state, sigma in self.data.gas_ionization.items():
-            share = float(mean[states.index(state)])
-            if sigma <= 0.0 or share <= 0.0:
+        for state, sigma in data.gas_ionization.items():
+            if sigma <= 0.0 or not np.any(shares[..., states.index(state)] > 0.0):
                 continue
+            secondary = data.secondary_energy.get(state, self.secondary_energy)
             for gas, weight, ion in gases:
                 label = f"gas ionization by {state}" + (
                     "" if gas == self.gas else f" ({gas})"
@@ -375,9 +515,9 @@ class Neutralizer:
                 sources.append(
                     VolumeSource(
                         {gas: -1, ion: 1, "e": 1},
-                        rate * share * sigma * weight,
+                        coefficient(state, sigma * weight),
                         per=(gas,),
-                        electron_energy=self.secondary_energy,
+                        electron_energy=secondary,
                         name=label,
                     )
                 )
@@ -447,7 +587,7 @@ class Neutralizer:
         return NeutralizerResult(
             position=z,
             fractions=fractions,
-            states=tuple(self.data.transitions.states),
+            states=tuple(self.beam_data().transitions.states),
             plasma=state,
             gas_density=gas_density,
             beam_power=float(beam_power),

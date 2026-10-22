@@ -42,12 +42,16 @@ optional-dependencies.docs = [
   "matplotlib>=3.10.9",
   "nbclient>=0.11",
   "nbformat>=5.11.1",
+  "patchwork-amr>=0.1.0",
   "simgeometry>=0.1.1",
 ]
-# the patch grid of wellbalanced.spatial needs patchwork, installed from git: "patchwork" on
-# PyPI is an unrelated project, so it must never be listed here (see picnic's pyproject)
-optional-dependencies.spatial = [ "simgeometry>=0.1.1" ]
-optional-dependencies.test = [ "pytest", "pytest-cov", "simgeometry>=0.1.1" ]
+optional-dependencies.spatial = [ "patchwork-amr>=0.1.0", "simgeometry>=0.1.1" ]
+optional-dependencies.test = [
+  "patchwork-amr>=0.1.0",
+  "pytest",
+  "pytest-cov",
+  "simgeometry>=0.1.1",
+]
 urls.Source = "https://github.com/max-models/wellbalanced"
 
 [tool.setuptools]
@@ -85,6 +89,7 @@ report.show_missing = true
 # PRs to devel test against the devel branches of the max-models packages (pinned in
 # uv.lock); PRs to main and the release use PyPI only (CI sets UV_NO_SOURCES).
 [tool.uv.sources]
+patchwork-amr = { git = "https://github.com/max-models/patchwork", branch = "devel" }
 plasma-plots = { git = "https://github.com/max-models/plasma-plots", branch = "devel" }
 plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "devel" }
 scope-profiler = { git = "https://github.com/max-models/scope-profiler", branch = "devel" }

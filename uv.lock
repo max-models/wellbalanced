@@ -2741,6 +2741,22 @@ wheels = [
 ]
 
 [[package]]
+name = "patchwork-amr"
+version = "0.1.0"
+source = { git = "https://github.com/max-models/patchwork?branch=devel#24596e2524b2ec0323cf6aa5f3d95b9ff0590e47" }
+dependencies = [
+    { name = "maybempi" },
+    { name = "mpiarray" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "scope-profiler" },
+]
+
+[[package]]
 name = "pexpect"
 version = "4.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4173,7 +4189,6 @@ dependencies = [
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "scope-profiler" },
-    { name = "simgeometry" },
     { name = "xarray", version = "2025.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "xarray", version = "2026.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
@@ -4188,6 +4203,7 @@ dev = [
     { name = "matplotlib", version = "3.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "nbclient" },
     { name = "nbformat" },
+    { name = "patchwork-amr" },
     { name = "plasma-plots" },
     { name = "pre-commit" },
     { name = "pyproject-fmt" },
@@ -4195,6 +4211,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "simgeometry" },
 ]
 docs = [
     { name = "griffe" },
@@ -4204,11 +4221,19 @@ docs = [
     { name = "matplotlib", version = "3.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "nbclient" },
     { name = "nbformat" },
+    { name = "patchwork-amr" },
     { name = "plasma-plots" },
+    { name = "simgeometry" },
+]
+spatial = [
+    { name = "patchwork-amr" },
+    { name = "simgeometry" },
 ]
 test = [
+    { name = "patchwork-amr" },
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "simgeometry" },
 ]
 
 [package.metadata]
@@ -4220,6 +4245,9 @@ requires-dist = [
     { name = "nbclient", marker = "extra == 'docs'", specifier = ">=0.11" },
     { name = "nbformat", marker = "extra == 'docs'", specifier = ">=5.11.1" },
     { name = "numpy" },
+    { name = "patchwork-amr", marker = "extra == 'docs'", git = "https://github.com/max-models/patchwork?branch=devel" },
+    { name = "patchwork-amr", marker = "extra == 'spatial'", git = "https://github.com/max-models/patchwork?branch=devel" },
+    { name = "patchwork-amr", marker = "extra == 'test'", git = "https://github.com/max-models/patchwork?branch=devel" },
     { name = "plasma-plots", marker = "extra == 'docs'", git = "https://github.com/max-models/plasma-plots?branch=devel" },
     { name = "plasmacoll", git = "https://github.com/max-models/plasmacoll?branch=devel" },
     { name = "pre-commit", marker = "extra == 'dev'" },
@@ -4229,12 +4257,14 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'test'" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "scipy" },
-    { name = "simgeometry", git = "https://github.com/max-models/simgeometry?branch=devel" },
     { name = "scope-profiler", git = "https://github.com/max-models/scope-profiler?branch=devel" },
+    { name = "simgeometry", marker = "extra == 'docs'", git = "https://github.com/max-models/simgeometry?branch=devel" },
+    { name = "simgeometry", marker = "extra == 'spatial'", git = "https://github.com/max-models/simgeometry?branch=devel" },
+    { name = "simgeometry", marker = "extra == 'test'", git = "https://github.com/max-models/simgeometry?branch=devel" },
     { name = "wellbalanced", extras = ["docs", "test"], marker = "extra == 'dev'" },
     { name = "xarray" },
 ]
-provides-extras = ["dev", "docs", "test"]
+provides-extras = ["dev", "docs", "spatial", "test"]
 
 [[package]]
 name = "widgetsnbextension"

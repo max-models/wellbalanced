@@ -14,8 +14,8 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `InductiveField2D(grid=...)`, the cold and viscous solvers, grounded and floating conductors,
   the curl, `DriverCoupling` and `PlasmaRegion` run on it; every closed-form check of the
   field models runs on both grids. The r–z BUG example on patches: a third of the cells, the
-  same coil currents and efficiencies, four times faster. patchwork is installed from git
-  (the name is taken on PyPI); the patch-grid tests skip without it.
+  same coil currents and efficiencies, four times faster. patchwork comes with the `spatial`
+  extra, as `patchwork-amr` (its name on PyPI); the patch-grid tests skip without it.
 - `CellGrid.dims`, `.locate` and `.wall_cells`; `PlasmaRegion.wall_faces` goes through the
   grid (periodic seams are no walls now).
 

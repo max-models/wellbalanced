@@ -4,8 +4,9 @@
 :mod:`wellbalanced.spatial` meet the geometry: the cell edges and centres, the
 cross-section areas, volumes and face areas of the cells, the metric of the
 geometry, the masks of shapes and the finite-volume operators. The solvers use
-nothing else, so another grid (a non-uniform cell grid of simgeometry, once it has
-one) can replace it in this module alone.
+nothing else, so another grid can replace it: :class:`~wellbalanced.spatial.patches.PatchGrid`,
+the leaf cells of a patchwork hierarchy, has the same interface (its fields are arrays
+over the cells, shape ``(n,)``, where this grid's are ``(nx, ny)``).
 
 Two geometries:
 
@@ -144,6 +145,34 @@ class CellGrid:
     def coordinate_names(self) -> tuple[str, str]:
         """``("x", "y")`` or ``("r", "z")``."""
         return ("r", "z") if self.cylindrical else ("x", "y")
+
+    @property
+    def dims(self) -> tuple[str, ...]:
+        """The dimensions of a field in a dataset: the two axes."""
+        return self.coordinate_names
+
+    def locate(self, x: float, y: float) -> tuple[int, int]:
+        """The cell whose centre is nearest to ``(x, y)`` along each axis."""
+        return int(np.argmin(np.abs(self.x - x))), int(np.argmin(np.abs(self.y - y)))
+
+    def wall_cells(self, inside: np.ndarray) -> np.ndarray:
+        """The cells of ``inside`` with a face to a cell outside it or to the domain's edge.
+
+        The axis of an r–z domain and periodic seams are not walls.
+        """
+        inside = np.asarray(inside, dtype=bool)
+        result = np.zeros(self.shape, dtype=bool)
+        for axis in (0, 1):
+            for step in (1, -1):
+                # the neighbour of every cell toward ``step``
+                neighbour = np.roll(inside, -step, axis=axis)
+                if self.boundaries[axis] != "periodic":
+                    end: list[Any] = [slice(None), slice(None)]
+                    end[axis] = -1 if step == 1 else 0
+                    # beyond the edge: outside, except across the axis
+                    neighbour[tuple(end)] = self.on_axis and axis == 0 and step == -1
+                result |= inside & ~neighbour
+        return result
 
     # --- fields and regions -----------------------------------------------------
 

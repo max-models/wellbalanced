@@ -10,14 +10,16 @@ import numpy as np
 import pytest
 from plasmacoll.constants import ELECTRON_MASS, ELEMENTARY_CHARGE
 from scipy.constants import mu_0 as MU_0
-from simgeometry import Circle, Rectangle
 
-from wellbalanced.inductive import (
+from wellbalanced.spatial import (
     Conductor,
     InductiveField2D,
     Winding,
     stretched_edges,
 )
+
+simgeometry = pytest.importorskip("simgeometry")
+Circle, Rectangle = simgeometry.Circle, simgeometry.Rectangle
 
 FREQUENCY = 1.0e6
 

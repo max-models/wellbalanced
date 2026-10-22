@@ -15,10 +15,12 @@ boundaries that can be changed between steps.
 metal as one compressible gas in one or two dimensions (its boundaries and sources are in
 :mod:`wellbalanced.gasdynamics`).
 
-:class:`InductiveField2D` is the inductive RF field of coil windings, conductors and a
-prescribed plasma in a 2D cut (:mod:`wellbalanced.inductive`). :class:`RFDriver` is a 0D
-RF driver: a global model of its plasma and a transformer model of the coil's coupling,
-giving the coil current and the RF power transfer efficiency (:mod:`wellbalanced.driver`).
+:class:`RFDriver` is a 0D RF driver: a global model of its plasma and a transformer
+model of the coil's coupling, giving the coil current and the RF power transfer efficiency
+(:mod:`wellbalanced.driver`). The spatially resolved models are in
+:mod:`wellbalanced.spatial`: :class:`InductiveField2D`, the inductive RF field of coil
+windings, conductors and a prescribed plasma in a 2D cut or in r–z, with cold or viscous
+electrons, and :class:`DriverCoupling`, that field with a power-dependent plasma.
 
 The solves, time steps and runs carry scope-profiler regions tagged ``"wellbalanced"``,
 an opt-in tag: they record nothing unless an application enables it, e.g. with
@@ -53,14 +55,17 @@ from wellbalanced.global_model import (
     VolumeSource,
     WallReaction,
 )
-from wellbalanced.inductive import (
-    Conductor,
-    InductiveField2D,
-    InductiveSolution,
-    Winding,
-)
 from wellbalanced.magnetron import MATERIALS, Magnetron, TargetMaterial
 from wellbalanced.reactions import Reaction
+from wellbalanced.spatial import (
+    CellGrid,
+    Conductor,
+    DriverCoupling,
+    InductiveField2D,
+    InductiveSolution,
+    PlasmaRegion,
+    Winding,
+)
 from wellbalanced.species import ELECTRON, Species
 
 scope_profiler.register_opt_in_tag(*_PROFILE_TAGS)
@@ -70,12 +75,14 @@ __version__ = "0.1.0"
 __all__ = [
     "ELECTRON",
     "Boundary",
+    "CellGrid",
     "Chamber",
     "Coil",
     "Conductor",
     "Cusp",
     "DriftFluid2D",
     "DriftFluid2DState",
+    "DriverCoupling",
     "DriverState",
     "Fluid1D",
     "FluidSpecies",
@@ -89,6 +96,7 @@ __all__ = [
     "InductiveSolution",
     "MATERIALS",
     "Magnetron",
+    "PlasmaRegion",
     "PotentialBoundary",
     "RFDriver",
     "Reaction",

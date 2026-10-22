@@ -44,6 +44,11 @@ jobs:
       - name: Install project
         run: uv sync --extra dev
 
+      # patchwork (wellbalanced.spatial.patches) cannot be a listed dependency: "patchwork"
+      # on PyPI is an unrelated project. Type checking needs it on every branch.
+      - name: Install patchwork from git (devel)
+        run: uv pip install "patchwork @ git+https://github.com/max-models/patchwork@devel"
+
       - name: Type check
         run: uv run pyright src/
 

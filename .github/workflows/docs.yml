@@ -24,7 +24,11 @@ jobs:
   docs:
     uses: max-models/starlight-theme/.github/workflows/docs.yml@v0.4.0
     with:
-      pre-build: uv run python docs/tools/examples.py
+      # patchwork for the examples on patches (examples/rf_driver_rz.py); it cannot be a
+      # listed dependency, "patchwork" on PyPI being an unrelated project
+      pre-build: >-
+        uv pip install "patchwork @ git+https://github.com/max-models/patchwork@devel"
+        && uv run python docs/tools/examples.py
       smoke-paths: |
         getting-started/installation/index.html
         tutorials/index.html

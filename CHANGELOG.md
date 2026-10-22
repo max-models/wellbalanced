@@ -7,6 +7,16 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Neutralizer beam sources as functions of the local beam: `Neutralizer.beam_sources(flux,
+  fractions, energy)` gives the stripping, capture and gas-ionization sources where the beam
+  has that particle flux, those charge-state fractions and that energy (numbers, or arrays
+  across the channel). `BeamCrossSections` holds the cross sections as functions of the beam
+  energy (e.g. plasmacoll `CrossSection`s), with the gas ionization optionally a
+  `SecondaryElectrons` such as `plasmacoll.RuddIonization`, whose mean secondary energy then
+  feeds the electrons (`BeamData.secondary_energy`, per beam state).
+- `Fluid1D(volume_sources=...)`: the global model's `VolumeSource`s in 1D, with rates per
+  unit density of fluid or fixed species, numbers or arrays on the cells; their electron
+  energy appears as `sources` in `energy_balance`.
 - `PatchGrid`: the leaf cells of a patchwork hierarchy as the grid of `wellbalanced.spatial`,
   with `CellGrid`'s interface (fields over the leaf cells, shape `(n,)`): `refined` (boxes or
   a function per level), `from_edges` (about as fine as a tensor grid, for comparisons),

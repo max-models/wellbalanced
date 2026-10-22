@@ -96,6 +96,11 @@ print(result.neutral_fraction, result.plasma.ionization_degree(["D2", "D"]))
 ```
 
 Real data go into a `Neutralizer` with a `BeamData` (the beam's cross sections on the gas
-and the plasma) and the plasma's species and reactions.
+and the plasma at its energy) or a `BeamCrossSections` (the same as functions of the beam
+energy, e.g. plasmacoll `CrossSection`s, and the gas ionization as an energy distribution of
+its secondary electrons such as `plasmacoll.RuddIonization`), and the plasma's species and
+reactions. `model.beam_sources(flux, fractions, energy)` gives the beam's sources where the
+beam has that flux, those charge-state fractions and that energy: numbers for the global
+model, or arrays on the cells of a `Fluid1D` (its `volume_sources`).
 
 See the [API reference](/wellbalanced/api/wellbalanced/) for every class and function.

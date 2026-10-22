@@ -10,7 +10,7 @@ import pytest
 from plasmacoll import CrossSection
 from plasmacoll.constants import ELECTRON_MASS
 
-from wellbalanced import ELECTRON, Reaction, Species
+from wellbalanced import ELECTRON, Reaction, Species, VolumeSource
 from wellbalanced.fluid1d import (
     Boundary,
     Fluid1D,
@@ -155,6 +155,60 @@ def test_boundaries_can_be_changed_between_steps() -> None:
     assert held.fluxes["Ar+"][-1] < injected  # less density, less flux
     with pytest.raises(ValueError, match="no species"):
         model.set_boundary("middle", "e", Boundary.wall())
+
+
+def test_volume_sources_are_sources_per_unit_density_with_their_energy() -> None:
+    """A beam-like source on a fixed gas equals the same rates given as sources and heating."""
+    cells, gas = 50, 2.0e19
+    x = (np.arange(cells) + 0.5) / cells
+    rate = 1.0e21 * np.exp(-(((x - 0.5) / 0.2) ** 2))  # m^-3 s^-1
+    energy = 30.0  # eV per event
+    plain = plasma(
+        0.05,
+        cells,
+        electron_temperature=None,
+        fixed={"Ar": gas},
+        sources={"e": rate, "Ar+": rate},
+        heating=rate * energy * 1.602176634e-19,
+    )
+    source = VolumeSource(
+        {"e": 1, "Ar+": 1, "Ar": -1},
+        rate / gas,
+        per=("Ar",),
+        electron_energy=energy,
+        name="beam",
+    )
+    beam = plasma(
+        0.05,
+        cells,
+        electron_temperature=None,
+        fixed={"Ar": gas},
+        volume_sources=[source],
+    )
+    rng = np.random.default_rng(1)
+    density = 1e15 * (1.0 + 0.1 * rng.random(cells))
+    unknowns = beam.pack(
+        {"e": density, "Ar+": density * 1.01},
+        2.0 + rng.random(cells),
+        rng.random(cells),
+    )
+    assert beam._residual(unknowns, None, np.inf) == pytest.approx(
+        plain._residual(unknowns, None, np.inf), rel=1e-12, abs=1e-300
+    )
+    state = beam.state(unknowns)
+    assert state.reaction_rates["beam"] == pytest.approx(rate)
+    terms = beam.energy_balance(state)
+    assert terms["sources"] == pytest.approx(state.integral(rate * energy))
+    assert terms["reactions"] == 0.0
+    with pytest.raises(ValueError, match="one per cell"):
+        plasma(
+            0.05,
+            cells,
+            fixed={"Ar": gas},
+            volume_sources=[VolumeSource({"e": 1}, np.ones(3), per=("Ar",))],
+        )
+    with pytest.raises(ValueError, match="1D model"):
+        source.coefficient(2.0, 0.025)
 
 
 def test_bad_models_are_refused() -> None:

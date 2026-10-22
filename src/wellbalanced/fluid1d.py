@@ -47,6 +47,7 @@ from scope_profiler import profile
 
 from wellbalanced._profiling import _PROFILE_TAGS
 from wellbalanced.datasets import variable
+from wellbalanced.global_model import VolumeSource
 from wellbalanced.reactions import Reaction
 from wellbalanced.species import Species
 
@@ -260,6 +261,10 @@ class Fluid1D:
         heating: Power to the electrons (W/m^3), a number or an array on the cells.
         sources: External volume sources ``{species: rate}`` (m^-3 s^-1), numbers
             or arrays on the cells.
+        volume_sources: External sources as for the global model, e.g. a beam's
+            (:meth:`wellbalanced.neutralizer.Neutralizer.beam_sources`): rates per
+            unit density of fluid or fixed species, numbers or arrays on the
+            cells, with the energy they give the electrons.
     """
 
     species: Sequence[FluidSpecies]
@@ -273,6 +278,7 @@ class Fluid1D:
     potential: dict[str, PotentialBoundary] = field(default_factory=dict)
     heating: float | np.ndarray = 0.0
     sources: Mapping[str, float | np.ndarray] = field(default_factory=dict)
+    volume_sources: Sequence[VolumeSource] = ()
 
     def __post_init__(self) -> None:
         """Check the species and index the unknowns."""
@@ -289,6 +295,15 @@ class Fluid1D:
             unknown -= known
             if unknown:
                 raise ValueError(f"{reaction.name}: unknown species {sorted(unknown)}")
+        for source in self.volume_sources:
+            unknown = (set(source.changes) | set(source.per)) - known
+            if unknown:
+                raise ValueError(f"{source.name}: unknown species {sorted(unknown)}")
+            if not callable(source.rate) and np.size(source.rate) not in (
+                1,
+                self.cells,
+            ):
+                raise ValueError(f"{source.name}: a rate is a number or one per cell")
         for end in self.boundaries:
             if end not in ("left", "right"):
                 raise ValueError(f"boundary ends are 'left' and 'right', not {end!r}")
@@ -525,7 +540,10 @@ class Fluid1D:
     # -- the equations --------------------------------------------------------------
 
     def _reactions(self, densities, te):
-        """Volume rates of the reactions, the source of every species and the energy loss."""
+        """Volume rates of the reactions and sources, the source of every species, the energy loss.
+
+        The energy loss is that of the reactions minus what the volume sources give.
+        """
         n_all = {**self._fixed, **densities}
         sources = {name: np.zeros(self.cells) for name in self._names}
         for name, value in self.sources.items():
@@ -543,7 +561,29 @@ class Fluid1D:
                 if name in sources:
                     sources[name] = sources[name] + count * rate
             loss = loss + reaction.electron_loss(te, tg) * rate
+        for source, rate in zip(
+            self.volume_sources, self._source_rates(n_all, te), strict=True
+        ):
+            rates[source.name] = rates.get(source.name, 0.0) + rate
+            for name, count in source.changes.items():
+                if name in sources:
+                    sources[name] = sources[name] + count * rate
+            loss = loss - source.electron_energy * rate
         return rates, sources, loss
+
+    def _source_rates(self, n_all, te) -> list[np.ndarray]:
+        """The volume rate of every volume source on the cells (m^-3 s^-1)."""
+        out = []
+        for source in self.volume_sources:
+            if callable(source.rate):
+                coefficient = source.rate(te, self.gas_temperature)  # type: ignore[arg-type]
+            else:
+                coefficient = source.rate
+            rate = np.broadcast_to(np.asarray(coefficient, dtype=float), (self.cells,))
+            for name in source.per:
+                rate = rate * n_all[name]
+            out.append(np.asarray(rate, dtype=float))
+        return out
 
     def _residual(
         self, unknowns: np.ndarray, previous: np.ndarray | None, dt: float
@@ -720,8 +760,9 @@ class Fluid1D:
         """Return the electron energy terms, integrated over the slab (eV m^-2 s^-1).
 
         ``heating`` (external), ``field`` (work of the field, ``-Gamma_e E``),
-        ``reactions`` (lost in collisions, negative) and ``walls`` (the energy
-        flux out through both ends, negative); at a steady state they sum to zero.
+        ``reactions`` (lost in collisions, negative), ``sources`` (given by the
+        volume sources) and ``walls`` (the energy flux out through both ends,
+        negative); at a steady state they sum to zero.
         """
         if not self._energy:
             raise ValueError("isothermal electrons have no energy balance")
@@ -731,13 +772,22 @@ class Fluid1D:
         densities, te, phi = self._unpack(unknowns)
         fluxes, efield = self._fluxes(densities, te, phi)
         _, _, loss = self._reactions(densities, te)
+        rates = self._source_rates({**self._fixed, **densities}, te)
+        gained = sum(
+            (
+                s.electron_energy * r
+                for s, r in zip(self.volume_sources, rates, strict=True)
+            ),
+            np.zeros(self.cells),
+        )
         gamma = fluxes["e"]
         joule = -0.5 * (gamma[1:] * efield[1:] + gamma[:-1] * efield[:-1])
         heating = np.broadcast_to(self.heating, (self.cells,)) / E
         return {
             "heating": state.integral(heating),
             "field": state.integral(joule),
-            "reactions": -state.integral(loss),
+            "reactions": -state.integral(loss + gained),
+            "sources": state.integral(gained),
             "walls": -(fluxes["energy"][-1] - fluxes["energy"][0]),
         }
 

@@ -47,9 +47,6 @@ optional-dependencies.docs = [
 optional-dependencies.test = [ "pytest", "pytest-cov" ]
 urls.Source = "https://github.com/max-models/wellbalanced"
 
-[tool.uv.sources]
-scope-profiler = { git = "https://github.com/max-models/scope-profiler", branch = "devel" }
-
 [tool.setuptools]
 package-data."*" = [ "py.typed" ]
 packages.find.where = [ "src" ]
@@ -87,4 +84,5 @@ report.show_missing = true
 [tool.uv.sources]
 plasma-plots = { git = "https://github.com/max-models/plasma-plots", branch = "devel" }
 plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "devel" }
+scope-profiler = { git = "https://github.com/max-models/scope-profiler", branch = "devel" }
 simgeometry = { git = "https://github.com/max-models/simgeometry", branch = "devel" }

@@ -56,6 +56,12 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   time-harmonic or time-dependent; the absorbed power, the coil current
   for a given power and the RF power transfer efficiency. The field part
   of an RF-driver model; the plasma is an input.
+- **A 0D RF driver** (`RFDriver`, `wellbalanced.driver`): the global
+  model of the driver plasma coupled to a transformer model of the coil,
+  giving the coil current and the RF power transfer efficiency against
+  the absorbed power, the frequency and the geometry in seconds, for an
+  optimiser. No shields and no neighbouring drivers: those are the 2D
+  field’s part.
 - **The data of the kinetic codes**: rates come from
   [plasmacoll](https://github.com/max-models/plasmacoll)’s cross
   sections averaged over a Maxwellian, the data its Monte Carlo

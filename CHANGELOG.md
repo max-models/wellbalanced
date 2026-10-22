@@ -92,6 +92,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `Fluid1D`'s Newton solver: a central-difference Jacobian, the equations' scales held fixed
+  during each solve (so a cell's residual depends on its neighbours only and the Jacobian by
+  colours is exact), and the Bernoulli function's series to `x^4` near 0 (`1 - x/2` erred
+  by `x^2/12`, noise in the residual of a fine mesh). Newton converges quadratically again
+  with an energy equation and ion momentum; the `Fluid1D` tests run in a fifth of the time.
 - `InductiveField2D`, `InductiveSolution`, `Winding`, `Conductor` moved from
   `wellbalanced.inductive` to `wellbalanced.spatial` (still exported by `wellbalanced`);
   powers are per volume element (`cell_volumes`), `depth` is optional (an r–z solution has

@@ -20,7 +20,8 @@ model of the coil's coupling, giving the coil current and the RF power transfer 
 (:mod:`wellbalanced.driver`). The spatially resolved models are in
 :mod:`wellbalanced.spatial`: :class:`InductiveField2D`, the inductive RF field of coil
 windings, conductors and a prescribed plasma in a 2D cut or in r–z, with cold or viscous
-electrons, and :class:`DriverCoupling`, that field with a power-dependent plasma.
+electrons, :class:`DriverCoupling`, that field with a power-dependent plasma, and
+:class:`InductiveField3D`, the field in 3D on the edges of a Cartesian grid.
 
 The solves, time steps and runs carry scope-profiler regions tagged ``"wellbalanced"``,
 an opt-in tag: they record nothing unless an application enables it, e.g. with
@@ -62,6 +63,7 @@ from wellbalanced.spatial import (
     Conductor,
     DriverCoupling,
     InductiveField2D,
+    InductiveField3D,
     InductiveSolution,
     PlasmaRegion,
     Winding,
@@ -93,6 +95,7 @@ __all__ = [
     "GlobalModel",
     "GlobalState",
     "InductiveField2D",
+    "InductiveField3D",
     "InductiveSolution",
     "MATERIALS",
     "Magnetron",

@@ -7,6 +7,33 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Fluid2D` (`wellbalanced.spatial.fluid`, step R3.3 of the RF-driver plan): the driver
+  plasma as a multi-species fluid on the cells of the field's grid, in r–z or in a cut.
+  Ion continuity and momentum (inertia, born at rest, drag on the gas from the mobility
+  or from a constant mean free path), drift-diffusion electrons with their energy (rates
+  from plasmacoll, `nu` from the momentum-transfer reactions), a quasi-neutral potential
+  with sheath walls (Bohm ions, Boltzmann-reflected electrons) or Fluid1D's Poisson
+  closure; heated by the field's `1/2 Re(J E*)` and pushed by its RF Lorentz force. Finite
+  volumes on the faces, implicit, Newton with a coloured finite-difference Jacobian; on a
+  `CellGrid` or a single-level `PatchGrid` (refined patches wait for patchwork's
+  refluxing). Checked: particles and energy over a step to round-off, a slab against
+  Fluid1D to 1e-10, ambipolar diffusion in a slab and a cylinder against their closed
+  forms (first order), the collisionless slab with uniform ionization (`n_s = n_0 / 2`),
+  patches against the tensor grid, a driver's steady state, and the coupled column
+  against the global model (with the fluid's edge-to-mean ratio: `n_e` within 6 %, the
+  coil current within 3 %). Placeholder rates and ion mobilities.
+- `fluid_plasma` and `FluidPlasma`: the field–fluid fixed point at a given absorbed power,
+  the plasma model of `DriverCoupling` (with relaxation and a ramp of the force).
+- `InductiveSolution.lorentz_force` (the RF-averaged `-(e/2) Re(u x B*)` per electron) and
+  `.electron_velocity_amplitude`; `CellGrid.transport_faces` and
+  `PatchGrid.transport_faces` (`TransportFaces`), the faces for finite-volume transport;
+  `scharfetter_gummel` shared by Fluid1D and Fluid2D.
+- Example `rf_driver_fluid2d.py`: the BUG driver in r–z as a fluid in its field at 25 kW
+  (106 A, eta 88 %), against the global model in the same field (124 A, 84 %) and with the
+  fluid's edge ratio (`n_e` within 4 %), and the size of the RF Lorentz force (about 17
+  kV/m against an ambipolar 0.7 kV/m); with the full force the fixed point does not
+  converge yet.
+
 - The ion momentum equation in `Fluid1D` (`FluidSpecies(..., momentum=True)`): the velocity
   on the faces between cells as an unknown, the electric and pressure force as the
   Scharfetter-Gummel flux times the friction `e / (M mu)` (so without inertia it is the

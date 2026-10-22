@@ -87,6 +87,72 @@ Boundaries are set per species and end, and can be changed between steps:
 `model.set_boundary("left", "e", Boundary.flux(1e16))`. Resolve the Debye length with the
 cells: with an unresolved sheath Newton's method cannot take long implicit steps.
 
+## A 2D driver plasma
+
+`Fluid2D` is the driver plasma on the cells of the inductive field's grid: electrons, ions
+with inertia, the electron energy and a quasi-neutral potential with sheath walls. Here
+an infinitely long driver (a plasma column in its solenoid, periodic along `z`), heated by
+its field at 25 kW absorbed:
+
+```python
+import numpy as np
+from simgeometry import Rectangle
+
+from wellbalanced.driver import illustrative_hydrogen_driver
+from wellbalanced.fluid1d import FluidSpecies
+from wellbalanced.spatial import (
+    CellGrid,
+    DriverCoupling,
+    Fluid2D,
+    InductiveField2D,
+    Winding,
+    fluid_plasma,
+)
+
+driver = illustrative_hydrogen_driver()  # placeholder rates: it warns
+R, L = driver.radius, driver.length
+grid = CellGrid(
+    np.r_[np.linspace(0, R, 25), np.linspace(R, 0.2, 12)[1:]],
+    [0.0, L],
+    geometry="cylindrical",
+    boundaries=("neumann", "periodic"),
+)
+ions = [s for s in driver.species if s.charge > 0]
+fluid = Fluid2D(
+    grid,
+    [FluidSpecies(driver.species[0], 1.0)] + [FluidSpecies(s, 500.0) for s in ions],
+    driver.reactions,
+    region=grid.xx < R,
+    fixed=driver.fixed,
+    gas_temperature=0.08,
+    momentum_transfer=driver.momentum_transfer,  # nu of the electrons, also the field's
+    ion_mean_free_path=driver.ion_mean_free_path,
+)
+coil = Winding(Rectangle((driver.coil_radius, L / 2), (0.004, 1.0)), sign=6)
+
+
+def field(profile):
+    return InductiveField2D(
+        grid=grid, frequency=1e6, windings=[coil], **profile.settings()
+    )
+
+
+start = fluid.pack({"H+": 5e17, "H2+": 1e18, "H3+": 5e17}, 5.0, 25.0)
+state = DriverCoupling(
+    field=field,
+    plasma=fluid_plasma(fluid, field, start, lorentz=False),
+    network_resistance=0.6,
+).at_absorbed_power(25e3)
+print(state.coil_current, state.efficiency, fluid.energy_balance(state.plasma.state))
+```
+
+`lorentz=True` (the default) adds the RF Lorentz force, which pushes the electrons away
+from the coil; `ramp` and `relaxation` take a strong force in gradually. At tens of kW in
+a driver the force exceeds the plasma pressure at the edge, and the fixed point with it
+does not converge yet. Conservative transport on refined patches waits for patchwork's
+refluxing: `Fluid2D` runs on a tensor `CellGrid` or a single-level `PatchGrid`. The full example is
+[the BUG driver in r–z](/wellbalanced/full-examples/rf-driver-fluid2d/).
+
 ## A neutralizer
 
 A fast beam's charge states on the gas and on the plasma it makes, with that plasma as a

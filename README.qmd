@@ -56,13 +56,19 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   electromagnetic shields) and a prescribed plasma in a 2D Cartesian cut or in r–z, with cold
   electrons or with the collisional electron viscosity, time-harmonic or (cold) time-dependent;
   the absorbed power, the coil current for a given power and the RF power transfer efficiency.
-  `DriverCoupling` closes the loop with a power-dependent plasma (a global model's, for now)
-  at a set absorbed or generator power. The field part of an RF-driver model; the plasma's
-  shape is an input until `Fluid2D`. Shapes come from simgeometry
+  `DriverCoupling` closes the loop with a power-dependent plasma (a global model's or
+  `Fluid2D`'s) at a set absorbed or generator power. Shapes come from simgeometry
   (`pip install "wellbalanced[spatial]"`, which also installs
   [patchwork](https://github.com/max-models/patchwork), on PyPI as `patchwork-amr`). On a
   tensor grid stretched toward the far boundary, or on refined patches (`PatchGrid`): a coarse
   base out to the far boundary and fine patches only over the coil and the skin layer.
+- **The driver plasma in 2D** (`Fluid2D`, `wellbalanced.spatial`): a multi-species fluid on
+  the field's cells, in r–z or in a cut: ion continuity and momentum (inertia, drag on the
+  gas), drift-diffusion electrons with their energy, a quasi-neutral potential with sheath
+  walls (or Poisson's equation, which on a slab is `Fluid1D`), heated by the field's
+  `1/2 Re(J E*)` and pushed off the coil by its RF Lorentz force; `fluid_plasma` iterates
+  field and fluid to a fixed point for `DriverCoupling`. On a tensor grid or a single-level
+  patch grid (refined patches wait for patchwork's refluxing).
 - **A 0D RF driver** (`RFDriver`, `wellbalanced.driver`): the global model of the driver
   plasma coupled to a transformer model of the coil, giving the coil current and the RF power
   transfer efficiency against the absorbed power, the frequency and the geometry in seconds,

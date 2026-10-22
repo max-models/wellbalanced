@@ -173,7 +173,7 @@ def test_a_viscous_plasma_needs_a_collision_frequency():
             collision_frequency=0.0,
             electron_temperature=5.0,
         )
-    with pytest.raises(NotImplementedError, match="Fluid2D"):
+    with pytest.raises(NotImplementedError, match="in-plane drift"):
         InductiveField2D(
             [0.0, 1.0], [0.0, 1.0], frequency=FREQUENCY, electron_drift=(0.0, 0.0)
         )

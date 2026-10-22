@@ -31,12 +31,20 @@ between the axis and the first centre, where ``a_phi`` grows linearly, adds ``4 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import numpy as np
 import scipy.sparse as sp
 
-__all__ = ["AxisBoundary", "CellField", "CellGrid", "Geometry", "stretched_edges"]
+__all__ = [
+    "AxisBoundary",
+    "CellField",
+    "CellGrid",
+    "Geometry",
+    "TransportFaces",
+    "stretched_edges",
+]
 
 Geometry = Literal["cartesian", "cylindrical"]
 AxisBoundary = Literal["dirichlet", "neumann", "periodic"]
@@ -78,6 +86,69 @@ def stretched_edges(
     left = outward(fine_lower, lower)[::-1]
     right = outward(fine_upper, upper)
     return np.asarray([*left, *core, *right])
+
+
+@dataclass(frozen=True)
+class TransportFaces:
+    """The faces of a grid for finite-volume transport (a divergence, not a curl).
+
+    Interior faces join the cells ``low`` and ``high`` (``high`` is the one further
+    along ``axis``; across a periodic seam it is the first cell): ``area`` is the
+    face area (the length in a cut, per metre along ``z``; ``2 pi r dz`` for a radial
+    and ``pi (r1^2 - r0^2)`` for an axial face in r–z), ``delta_low`` and ``delta_high``
+    the distances from the two cell centres to the face along ``axis``. Boundary faces
+    of the domain's edges have their ``boundary_cell``, ``boundary_axis``,
+    ``boundary_side`` (0 below the cell, 1 above), ``boundary_area`` and
+    ``boundary_delta``; ``boundary_symmetry`` marks the edges of ``"neumann"`` axes. The
+    axis of an r–z domain (no area) and periodic seams have no boundary face.
+    """
+
+    low: np.ndarray
+    high: np.ndarray
+    axis: np.ndarray
+    area: np.ndarray
+    delta_low: np.ndarray
+    delta_high: np.ndarray
+    boundary_cell: np.ndarray
+    boundary_axis: np.ndarray
+    boundary_side: np.ndarray
+    boundary_area: np.ndarray
+    boundary_delta: np.ndarray
+    boundary_symmetry: np.ndarray
+
+    @property
+    def distance(self) -> np.ndarray:
+        """The distance between the two cell centres of every interior face."""
+        return self.delta_low + self.delta_high
+
+    @classmethod
+    def concatenate(
+        cls,
+        interior: Sequence[tuple[np.ndarray, ...]],
+        boundary: Sequence[tuple[np.ndarray, ...]],
+    ) -> TransportFaces:
+        """Faces from lists of arrays, the faces of no area dropped.
+
+        ``interior``: ``(low, high, axis, area, delta_low, delta_high)``; ``boundary``:
+        ``(cell, axis, side, area, delta, symmetry)``.
+        """
+
+        def stack(parts, k, dtype):
+            if not parts:
+                return np.zeros(0, dtype=dtype)
+            return np.concatenate(
+                [np.asarray(p[k], dtype=dtype).ravel() for p in parts]
+            )
+
+        inner = [
+            stack(interior, k, t) for k, t in enumerate((int, int, int) + (float,) * 3)
+        ]
+        edge = [
+            stack(boundary, k, t)
+            for k, t in enumerate((int, int, int, float, float, bool))
+        ]
+        keep_inner, keep_edge = inner[3] > 0.0, edge[3] > 0.0
+        return cls(*(a[keep_inner] for a in inner), *(a[keep_edge] for a in edge))
 
 
 class CellGrid:
@@ -383,6 +454,64 @@ class CellGrid:
     def net_current(self, residual: np.ndarray, region: np.ndarray) -> Any:
         """The current through a region's cross-section from ``V J`` on its cells."""
         return np.sum(residual[region] / self.circumference[region])
+
+    def transport_faces(self) -> TransportFaces:
+        """The faces of the cells for finite-volume transport (see :class:`TransportFaces`)."""
+        index = np.arange(self.size).reshape(self.shape)
+        widths = (np.diff(self.x_edges), np.diff(self.y_edges))
+        interior, boundary = [], []
+        for axis in (0, 1):
+            cells = np.moveaxis(index, axis, 0)
+            centres = (self.x, self.y)[axis]
+            edges = (self.x_edges, self.y_edges)[axis]
+            other = widths[1 - axis]
+
+            def area(edge: float, axis: int = axis, other: np.ndarray = other):
+                if not self.cylindrical:
+                    return other
+                if axis == 0:  # a radial face: a cylinder of radius ``edge``
+                    return 2.0 * np.pi * edge * other
+                return 2.0 * np.pi * self.x * other  # an axial face: an annulus
+
+            n = centres.size
+            for i in range(n - 1):
+                face = edges[i + 1]
+                interior.append(
+                    (
+                        cells[i],
+                        cells[i + 1],
+                        np.full(cells[i].shape, axis),
+                        area(face),
+                        np.full(cells[i].shape, face - centres[i]),
+                        np.full(cells[i].shape, centres[i + 1] - face),
+                    )
+                )
+            if self.boundaries[axis] == "periodic":
+                if n > 1:
+                    interior.append(
+                        (
+                            cells[-1],
+                            cells[0],
+                            np.full(cells[0].shape, axis),
+                            area(edges[-1]),
+                            np.full(cells[0].shape, edges[-1] - centres[-1]),
+                            np.full(cells[0].shape, centres[0] - edges[0]),
+                        )
+                    )
+                continue
+            symmetry = self.boundaries[axis] == "neumann"
+            for side, k, edge in ((0, 0, edges[0]), (1, -1, edges[-1])):
+                boundary.append(
+                    (
+                        cells[k],
+                        np.full(cells[k].shape, axis),
+                        np.full(cells[k].shape, side),
+                        np.broadcast_to(area(edge), cells[k].shape),
+                        np.full(cells[k].shape, abs(edge - centres[k])),
+                        np.full(cells[k].shape, symmetry),
+                    )
+                )
+        return TransportFaces.concatenate(interior, boundary)
 
     def coordinates(self) -> dict[str, tuple[str, np.ndarray, dict[str, str]]]:
         """The cell-centre coordinates as xarray coordinate entries."""

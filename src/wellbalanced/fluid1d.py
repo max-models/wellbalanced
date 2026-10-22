@@ -27,8 +27,9 @@ collisionless fluid of a presheath.
 Discretisation: finite volumes on uniform cells; the fluxes between cells are
 Scharfetter-Gummel fluxes, exact for a constant field between two cell
 centres, so the discrete steady states are those of the equations without an
-artificial diffusion. The flux of a species with momentum is an unknown on the
-faces between cells (a staggered grid), whose electric and pressure force is
+artificial diffusion. The velocity of a species with momentum is an unknown on
+the faces between cells (a staggered grid; the flux is it times the mean
+density of the two cells), whose electric and pressure force is
 the Scharfetter-Gummel flux times ``e / (M mu)``: without inertia the scheme
 is the drift-diffusion scheme exactly; ``Gamma^2 / n`` is taken on the cells. Every equation is implicit (backward Euler, Poisson
 included, so the step is not limited by the dielectric relaxation time),
@@ -346,11 +347,11 @@ class Fluid1D:
                 raise ValueError(f"boundary ends are 'left' and 'right', not {end!r}")
         self._names = names
         self._energy = self.electron_temperature is None
-        #: the species with momentum; their face fluxes come after the densities
+        #: the species with momentum; their face velocities come after the densities
         #: (and the electron energy), before the potential
         self._momentum = [f.name for f in self.species if f.momentum]
         self._nvar = len(names) + int(self._energy) + len(self._momentum) + 1
-        self._flux_column = {
+        self._velocity_column = {
             name: len(names) + int(self._energy) + k
             for k, name in enumerate(self._momentum)
         }
@@ -385,8 +386,10 @@ class Fluid1D:
     ) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray, dict[str, np.ndarray]]:
         """Densities, ``T_e`` and ``phi`` on the cells, and the fluxes with momentum.
 
-        The flux of a species with momentum is that of the face to the right of
-        each cell; the last cell's (an end face) is not an unknown and is zero.
+        The unknown of a species with momentum is its velocity on the face to the
+        right of each cell (the last cell's, an end face, is not used and is
+        zero), so it is of the same size whatever the density; the flux is the
+        velocity times the mean density of the two cells.
         """
         u = unknowns.reshape(self.cells, self._nvar)
         densities = {name: np.exp(u[:, k]) for k, name in enumerate(self._names)}
@@ -395,7 +398,10 @@ class Fluid1D:
             te = np.maximum(w / (1.5 * densities["e"]), TE_FLOOR)
         else:
             te = np.full(self.cells, float(self.electron_temperature))  # type: ignore[arg-type]
-        inner = {name: u[:-1, k] for name, k in self._flux_column.items()}
+        inner = {
+            name: u[:-1, k] * 0.5 * (densities[name][:-1] + densities[name][1:])
+            for name, k in self._velocity_column.items()
+        }
         return densities, te, u[:, -1], inner
 
     def pack(
@@ -419,11 +425,14 @@ class Fluid1D:
         if self._energy:
             ne = np.exp(u[:, self._electron])
             u[:, len(self._names)] = np.log(1.5 * ne * np.asarray(electron_temperature))
-        for name, k in self._flux_column.items():
+        for name, k in self._velocity_column.items():
             value = np.asarray((fluxes or {}).get(name, 0.0), dtype=float)
             if value.size == self.cells + 1:
                 value = value[1:-1]
-            u[:-1, k] = np.broadcast_to(value, (self.cells - 1,))
+            n = np.exp(u[:, self._names.index(name)])
+            u[:-1, k] = np.broadcast_to(value, (self.cells - 1,)) / (
+                0.5 * (n[:-1] + n[1:])
+            )
         u[:, -1] = potential
         return u.ravel()
 
@@ -747,7 +756,7 @@ class Fluid1D:
             res[:, len(self._names)] = balance / max(float(np.max(w)), 1.0)
         for fluid in self.species:
             if fluid.momentum:
-                column = self._flux_column[fluid.name]
+                column = self._velocity_column[fluid.name]
                 res[:-1, column] = self._momentum_residual(
                     fluid,
                     densities[fluid.name],
@@ -836,7 +845,7 @@ class Fluid1D:
         u = unknowns.copy()
         log_columns = np.ones(self._nvar, dtype=bool)
         log_columns[-1] = False  # the potential
-        log_columns[list(self._flux_column.values())] = False  # fluxes with momentum
+        log_columns[list(self._velocity_column.values())] = False  # velocities
         is_log = np.tile(log_columns, self.cells)
         linear = np.flatnonzero(~log_columns)
         for _ in range(max_iterations):
@@ -854,7 +863,7 @@ class Fluid1D:
             if largest > MAX_LOG_STEP:
                 delta *= MAX_LOG_STEP / largest
             u = u + delta
-            # the potential and the fluxes each converge relative to their own size
+            # the potential and the velocities each converge relative to their own size
             columns = u.reshape(self.cells, self._nvar)[:, linear]
             changes = delta.reshape(self.cells, self._nvar)[:, linear]
             scales = 1.0 + np.max(np.abs(columns), axis=0)

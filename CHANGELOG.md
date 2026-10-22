@@ -7,8 +7,8 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- The ion momentum equation in `Fluid1D` (`FluidSpecies(..., momentum=True)`): the flux on
-  the faces between cells as an unknown, the electric and pressure force as the
+- The ion momentum equation in `Fluid1D` (`FluidSpecies(..., momentum=True)`): the velocity
+  on the faces between cells as an unknown, the electric and pressure force as the
   Scharfetter-Gummel flux times the friction `e / (M mu)` (so without inertia it is the
   drift-diffusion scheme), upwind `Gamma^2 / n`, losses taking their momentum, and a wall
   that takes the outflow of the momentum balance over its half cell. Checked: drift-diffusion

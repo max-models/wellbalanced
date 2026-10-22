@@ -46,11 +46,15 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   charge states on the gas and on the plasma it makes, coupled to a global model of the
   channel fed by the beam's stripped and secondary electrons, iterated to a fixed point
   in seconds.
-- **The inductive RF field of a driver** (`InductiveField2D`, `wellbalanced.inductive`): the
+- **The inductive RF field of a driver** (`InductiveField2D`, `wellbalanced.spatial`): the
   magnetoquasistatic vector potential of coil windings, perfect conductors (backplates,
-  electromagnetic shields) and a prescribed cold plasma in a 2D Cartesian cut, time-harmonic
-  or time-dependent; the absorbed power, the coil current for a given power and the RF power
-  transfer efficiency. The field part of an RF-driver model; the plasma is an input.
+  electromagnetic shields) and a prescribed plasma in a 2D Cartesian cut or in r–z, with cold
+  electrons or with the collisional electron viscosity, time-harmonic or (cold) time-dependent;
+  the absorbed power, the coil current for a given power and the RF power transfer efficiency.
+  `DriverCoupling` closes the loop with a power-dependent plasma (a global model's, for now)
+  at a set absorbed or generator power. The field part of an RF-driver model; the plasma's
+  shape is an input until `Fluid2D`. Shapes come from simgeometry
+  (`pip install "wellbalanced[spatial]"`).
 - **A 0D RF driver** (`RFDriver`, `wellbalanced.driver`): the global model of the driver
   plasma coupled to a transformer model of the coil, giving the coil current and the RF power
   transfer efficiency against the absorbed power, the frequency and the geometry in seconds,

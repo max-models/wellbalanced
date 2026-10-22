@@ -7,6 +7,36 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `wellbalanced.spatial`: the spatially resolved models in one subpackage, on one cell
+  grid (`CellGrid`: edges, centres, cell volumes and face areas, the x–y or r–z metric,
+  shape masks and the curl-curl operator; the only place the geometry enters).
+- `InductiveField2D(geometry="cylindrical")`: the axisymmetric `A_phi(r, z)`, coil loops,
+  grounded conductors, total powers without a depth; checked against the field of a current
+  loop (complete elliptic integrals), a long solenoid and a plasma column in it (the
+  Bessel solution of `solenoid_impedance`, to 2e-4).
+- Viscous electrons (`electron_temperature=`, or `electron_viscosity=`): the electron
+  momentum balance with the local collisional viscosity `(2/3) n_e e T_e / nu` of Zielke et
+  al. (PSST 31, 035019, 2022), solved with the field as one sparse system, no slip at the
+  edge of the plasma; the absorbed power splits into friction and viscous parts. Checked
+  against the closed-form skin layer of a slab (a quartic dispersion relation) and, without
+  viscosity, against the cold plasma to round-off. The RF Lorentz force waits for `Fluid2D`.
+- `PlasmaRegion`: the plasma as a union of shapes on the grid (the driver and expansion T).
+- `DriverCoupling` and `global_model_plasma`: the field with a power-dependent plasma, at a
+  set absorbed power or at a set generator power (a fixed point, as the integral controller
+  of Zielke et al.); the `RFDriver`'s global model on a fixed spatial shape, which in an
+  infinite solenoid reproduces `RFDriver(coupling="solenoid")` to 0.2 %.
+- Example `rf_driver_rz.py`: the BUG driver in r–z with cold and viscous electrons and the
+  global model's plasma at 60 kW from the generator.
+
+### Changed
+
+- `InductiveField2D`, `InductiveSolution`, `Winding`, `Conductor` moved from
+  `wellbalanced.inductive` to `wellbalanced.spatial` (still exported by `wellbalanced`);
+  powers are per volume element (`cell_volumes`), `depth` is optional (an r–z solution has
+  none).
+- simgeometry is an optional dependency (`wellbalanced[spatial]`, and the test and docs
+  extras): the spatial models take any shape with `contains_points` and do not import it.
+
 - `RFDriver` (`wellbalanced.driver`): a 0D RF driver, the `GlobalModel` of its plasma
   coupled to a transformer model of the coil (Piejak, Godyak and Alexandrovich 1992;
   Lieberman and Lichtenberg sec. 12.2) with the cold collisional plasma's complex skin

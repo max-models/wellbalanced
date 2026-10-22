@@ -4,7 +4,7 @@ The geometry of Zielke, Briefi and Fantz (NIBS'22, arXiv:2211.10143, Fig. 2): a
 horizontal 2D cut through a driver (23.7 cm wide, 17.4 cm long) and the expansion region
 (24.4 cm), six coil windings (6 mm tubes) on each side, 1 MHz; the backplates and the
 expansion walls are perfect conductors, and so are the electromagnetic shields (EMS) when
-present. With :class:`wellbalanced.inductive.InductiveField2D` and a *prescribed* plasma
+present. With :class:`wellbalanced.spatial.InductiveField2D` and a *prescribed* plasma
 shaped like their Fig. 3 (up to 1.4e18 m^-3, depleted at the coil), this computes:
 
 1. ``|B_y|`` along the line through the coil centres, one driver and two (their Fig. 4):
@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from simgeometry import Circle, Rectangle
 
-from wellbalanced.inductive import (
+from wellbalanced.spatial import (
     Conductor,
     InductiveField2D,
     Winding,

@@ -22,7 +22,7 @@ and the impedance of the skin layer around the plasma,
     Z_p = (2 pi R / l) (k / sigma),   k = sqrt(i omega mu0 sigma),
 
 the coil sees ``Z_s = i omega L_11 + omega^2 M^2 / (Z_p + i omega L_2)``. The plasma is
-the cold, collisional one of :mod:`wellbalanced.inductive`,
+the cold, collisional one of :mod:`wellbalanced.spatial.inductive`,
 ``sigma = n_e e^2 / (m_e (nu_m + i omega))``: ``k / sigma`` is the surface impedance of
 the skin layer, ``(1 + i) / (sigma delta)`` in the collisional limit (``nu_m >> omega``,
 ``delta = sqrt(2 / (omega mu0 sigma))``) and ``i omega mu0 c / omega_pe`` with the
@@ -46,7 +46,7 @@ power over more plasma).
 
 What a 0D model cannot give: the distance between the coil and an electromagnetic
 shield and the mutual coupling of several drivers change the field around the
-coil, not the plasma; they are in the 2D field of :mod:`wellbalanced.inductive`.
+coil, not the plasma; they are in the 2D field of :mod:`wellbalanced.spatial.inductive`.
 Neither is the non-local (stochastic) heating of low pressures, which the cold
 plasma's collision frequency leaves out.
 """

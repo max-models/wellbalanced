@@ -13,10 +13,24 @@ with the energy flux of Hagelaar and Pitchford (2005): the electron flux with
 from the same :class:`~wellbalanced.reactions.Reaction` objects as the global
 model, with rates at the local electron temperature.
 
+An ion species with ``momentum=True`` obeys its momentum equation instead of
+drift-diffusion, so it can accelerate into a sheath (the Bohm criterion):
+
+    d Gamma/dt + d(Gamma^2 / n)/dx = (z e / M) n E - (e T_g / M) dn/dx - (nu + L / n) Gamma,
+
+isothermal at the gas temperature, with the friction ``nu = e / (M mu)`` of
+its mobility on the gas, and the loss rate ``L`` (m^-3 s^-1) of the reactions
+taking their momentum with them (ions are born at rest). Without inertia it is
+drift-diffusion with ``D = mu T_g``; with a large mobility it is the
+collisionless fluid of a presheath.
+
 Discretisation: finite volumes on uniform cells; the fluxes between cells are
 Scharfetter-Gummel fluxes, exact for a constant field between two cell
 centres, so the discrete steady states are those of the equations without an
-artificial diffusion. Every equation is implicit (backward Euler, Poisson
+artificial diffusion. The flux of a species with momentum is an unknown on the
+faces between cells (a staggered grid), whose electric and pressure force is
+the Scharfetter-Gummel flux times ``e / (M mu)``: without inertia the scheme
+is the drift-diffusion scheme exactly; ``Gamma^2 / n`` is taken on the cells. Every equation is implicit (backward Euler, Poisson
 included, so the step is not limited by the dielectric relaxation time),
 solved by Newton's method in the logarithms of the densities and of ``w``.
 :meth:`Fluid1D.steady_state` steps in pseudo-time with a growing step, then
@@ -26,10 +40,13 @@ Boundaries, per species and end (``"left"``, ``"right"``), may be changed betwee
 steps (the fluid side of a fluid-PIC coupling): an absorbing wall (the drift
 towards it plus half the thermal flux, after Hagelaar et al. 2000, with a
 reflection coefficient), a prescribed density, a prescribed flux, or symmetry. The potential at each end is a prescribed value or a prescribed field.
+For a species with momentum a wall takes the outflow of its momentum balance
+over the half cell next to it (supersonic, as into a sheath), and a
+prescribed density flows in or out at the velocity of the last face between
+cells.
 
-Not yet: an ion momentum equation (drift-diffusion ions do not satisfy the Bohm
-criterion at a wall; the sheath is collisional here), variable transport
-coefficients, a gas temperature equation.
+Not yet: variable transport coefficients, a gas temperature equation, an ion
+energy equation.
 """
 
 from __future__ import annotations
@@ -81,11 +98,14 @@ class FluidSpecies:
         mobility: ``mu`` in m^2/(V s) (charged species).
         diffusion: ``D`` in m^2/s; for a charged species ``None`` takes the
             Einstein relation ``D = mu T`` (``T_e`` for electrons, ``T_g`` for ions).
+        momentum: Solve the momentum equation of this ion species (with the
+            friction ``e / (M mu)`` of its mobility) instead of drift-diffusion.
     """
 
     species: Species
     mobility: float = 0.0
     diffusion: float | None = None
+    momentum: bool = False
 
     def __post_init__(self) -> None:
         """Validate the transport coefficients."""
@@ -97,6 +117,13 @@ class FluidSpecies:
             raise ValueError(f"{self.species.name}: a neutral species needs diffusion")
         if self.species.charge != 0 and self.mobility == 0.0:
             raise ValueError(f"{self.species.name}: a charged species needs mobility")
+        if self.momentum and (self.species.charge == 0 or self.species.is_electron):
+            raise ValueError(f"{self.species.name}: momentum is for ion species")
+        if self.momentum and self.diffusion is not None:
+            raise ValueError(
+                f"{self.species.name}: with momentum the pressure follows from the "
+                "gas temperature, not a diffusion coefficient"
+            )
 
     @property
     def name(self) -> str:
@@ -188,6 +215,16 @@ class FluidState:
     def integral(self, values: np.ndarray) -> float:
         """The integral of a cell field over the domain."""
         return float(np.sum(values) * (self.faces[1] - self.faces[0]))
+
+    def velocity(self, name: str) -> np.ndarray:
+        """The mean velocity of a species on the faces (m/s): its flux over the density there.
+
+        The density on a face between cells is the mean of the two; on an end
+        face, that of the cell next to it.
+        """
+        n = self.densities[name]
+        face = np.concatenate([n[:1], 0.5 * (n[:-1] + n[1:]), n[-1:]])
+        return self.fluxes[name] / face
 
     def to_dataset(self) -> xr.Dataset:
         """The state as a labelled dataset.
@@ -309,7 +346,14 @@ class Fluid1D:
                 raise ValueError(f"boundary ends are 'left' and 'right', not {end!r}")
         self._names = names
         self._energy = self.electron_temperature is None
-        self._nvar = len(names) + int(self._energy) + 1
+        #: the species with momentum; their face fluxes come after the densities
+        #: (and the electron energy), before the potential
+        self._momentum = [f.name for f in self.species if f.momentum]
+        self._nvar = len(names) + int(self._energy) + len(self._momentum) + 1
+        self._flux_column = {
+            name: len(names) + int(self._energy) + k
+            for k, name in enumerate(self._momentum)
+        }
         self.h = self.length / self.cells
         self.x = (np.arange(self.cells) + 0.5) * self.h
         self.faces = np.arange(self.cells + 1) * self.h
@@ -338,7 +382,12 @@ class Fluid1D:
 
     def _unpack(
         self, unknowns: np.ndarray
-    ) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray]:
+    ) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray, dict[str, np.ndarray]]:
+        """Densities, ``T_e`` and ``phi`` on the cells, and the fluxes with momentum.
+
+        The flux of a species with momentum is that of the face to the right of
+        each cell; the last cell's (an end face) is not an unknown and is zero.
+        """
         u = unknowns.reshape(self.cells, self._nvar)
         densities = {name: np.exp(u[:, k]) for k, name in enumerate(self._names)}
         if self._energy:
@@ -346,16 +395,23 @@ class Fluid1D:
             te = np.maximum(w / (1.5 * densities["e"]), TE_FLOOR)
         else:
             te = np.full(self.cells, float(self.electron_temperature))  # type: ignore[arg-type]
-        return densities, te, u[:, -1]
+        inner = {name: u[:-1, k] for name, k in self._flux_column.items()}
+        return densities, te, u[:, -1], inner
 
     def pack(
         self,
         densities: Mapping[str, np.ndarray | float],
         electron_temperature: np.ndarray | float = 2.0,
         potential: np.ndarray | float = 0.0,
+        fluxes: Mapping[str, np.ndarray | float] | None = None,
     ) -> np.ndarray:
-        """The unknowns of fields on the cells (densities by name, ``T_e``, ``phi``)."""
-        u = np.empty((self.cells, self._nvar))
+        """The unknowns of fields on the cells (densities by name, ``T_e``, ``phi``).
+
+        ``fluxes`` start the species with momentum: on the ``cells + 1`` faces
+        (as :attr:`FluidState.fluxes`), on the ``cells - 1`` faces between
+        cells, or a number; zero if missing.
+        """
+        u = np.zeros((self.cells, self._nvar))
         for k, name in enumerate(self._names):
             u[:, k] = np.log(
                 np.maximum(np.broadcast_to(densities[name], (self.cells,)), 1.0)
@@ -363,6 +419,11 @@ class Fluid1D:
         if self._energy:
             ne = np.exp(u[:, self._electron])
             u[:, len(self._names)] = np.log(1.5 * ne * np.asarray(electron_temperature))
+        for name, k in self._flux_column.items():
+            value = np.asarray((fluxes or {}).get(name, 0.0), dtype=float)
+            if value.size == self.cells + 1:
+                value = value[1:-1]
+            u[:-1, k] = np.broadcast_to(value, (self.cells - 1,))
         u[:, -1] = potential
         return u.ravel()
 
@@ -497,13 +558,76 @@ class Fluid1D:
             outflow = drift * n_cell + 0.5 * thermal * n_cell
         return float(outward * (1.0 - r) / (1.0 + r) * outflow)
 
-    def _fluxes(self, densities, te, phi):
-        """Fluxes of every species and of the electron energy on the faces, and ``E``."""
+    def _momentum_boundary(
+        self,
+        fluid: FluidSpecies,
+        end: str,
+        n_cell: float,
+        inner: float,
+        n_inner: float,
+        efield: float,
+    ) -> float:
+        """Flux at an end face of a species with momentum.
+
+        ``inner`` is the flux on the face between cells next to the end, where
+        the density is ``n_inner``, and ``efield`` the field at the end. A wall
+        takes the outflow of the momentum balance over the half cell next to it,
+        steady and with nothing coming back from the wall (supersonic, as into a
+        sheath): ``(2 / h) (Gamma^2 / n - Pi) = (z e / M) n E - nu Gamma``, with
+        ``Pi`` the momentum flux arriving from the inner face; without inertia
+        that is the drift ``mu z E n``. Half the thermal flux is added, as for
+        drift-diffusion.
+        """
+        condition = self.boundary(end, fluid.name)
+        outward = 1.0 if end == "right" else -1.0
+        if condition.kind == "symmetry":
+            return 0.0
+        if condition.kind == "flux":
+            return -outward * condition.value
+        if condition.kind == "density":
+            # upwind, at the inner face's velocity: the held density flows in,
+            # the cell's flows out
+            velocity = inner / n_inner
+            leaving = velocity * outward > 0.0
+            return velocity * (n_cell if leaving else condition.value)
+        mass = fluid.species.mass
+        arriving = max(inner * outward, 0.0) ** 2 / n_inner
+        a = 2.0 / (self.h * n_cell)
+        b = E / (mass * fluid.mobility)
+        c = (
+            2.0 * arriving / self.h
+            + fluid.species.charge * E * efield * outward * n_cell / mass
+        )
+        # the positive root of a G^2 + b G - c = 0, none if nothing pushes outwards
+        drift = 2.0 * c / (b + np.sqrt(b * b + 4.0 * a * c)) if c > 0.0 else 0.0
+        r = condition.reflection
+        thermal = np.sqrt(8.0 * E * self.gas_temperature / (np.pi * mass))
+        outflow = drift + 0.5 * thermal * n_cell
+        return float(outward * (1.0 - r) / (1.0 + r) * outflow)
+
+    def _fluxes(self, densities, te, phi, inner=None):
+        """Fluxes of every species and of the electron energy on the faces, and ``E``.
+
+        ``inner`` holds the fluxes of the species with momentum between cells.
+        """
         h = self.h
         efield = self._field(phi)
         fluxes = {}
         for fluid in self.species:
             n = densities[fluid.name]
+            if fluid.momentum:
+                assert inner is not None
+                g = inner[fluid.name]
+                flux = np.empty(self.cells + 1)
+                flux[1:-1] = g
+                flux[0] = self._momentum_boundary(
+                    fluid, "left", n[0], g[0], 0.5 * (n[0] + n[1]), efield[0]
+                )
+                flux[-1] = self._momentum_boundary(
+                    fluid, "right", n[-1], g[-1], 0.5 * (n[-2] + n[-1]), efield[-1]
+                )
+                fluxes[fluid.name] = flux
+                continue
             mu, d = self._coefficients(fluid, te)
             z = fluid.species.charge
             flux = np.empty(self.cells + 1)
@@ -542,7 +666,8 @@ class Fluid1D:
     def _reactions(self, densities, te):
         """Volume rates of the reactions and sources, the source of every species, the energy loss.
 
-        The energy loss is that of the reactions minus what the volume sources give.
+        The energy loss is that of the reactions minus what the volume sources
+        give; the sinks are the loss rates of the species with momentum.
         """
         n_all = {**self._fixed, **densities}
         sources = {name: np.zeros(self.cells) for name in self._names}
@@ -550,6 +675,7 @@ class Fluid1D:
             if name in sources:
                 sources[name] = sources[name] + np.broadcast_to(value, (self.cells,))
         loss = np.zeros(self.cells)
+        sinks = {name: np.zeros(self.cells) for name in self._momentum}
         rates = {}
         tg = self.gas_temperature
         for reaction in self.reactions:
@@ -560,6 +686,8 @@ class Fluid1D:
             for name, count in reaction.stoichiometry.items():
                 if name in sources:
                     sources[name] = sources[name] + count * rate
+                if name in sinks and count < 0:
+                    sinks[name] = sinks[name] - count * rate
             loss = loss + reaction.electron_loss(te, tg) * rate
         for source, rate in zip(
             self.volume_sources, self._source_rates(n_all, te), strict=True
@@ -568,8 +696,10 @@ class Fluid1D:
             for name, count in source.changes.items():
                 if name in sources:
                     sources[name] = sources[name] + count * rate
+                if name in sinks and count < 0:
+                    sinks[name] = sinks[name] - count * rate
             loss = loss - source.electron_energy * rate
-        return rates, sources, loss
+        return rates, sources, loss, sinks
 
     def _source_rates(self, n_all, te) -> list[np.ndarray]:
         """The volume rate of every volume source on the cells (m^-3 s^-1)."""
@@ -589,9 +719,9 @@ class Fluid1D:
         self, unknowns: np.ndarray, previous: np.ndarray | None, dt: float
     ) -> np.ndarray:
         """Backward Euler residual (``previous is None``: the steady equations)."""
-        densities, te, phi = self._unpack(unknowns)
-        fluxes, efield = self._fluxes(densities, te, phi)
-        _, sources, loss = self._reactions(densities, te)
+        densities, te, phi, inner = self._unpack(unknowns)
+        fluxes, efield = self._fluxes(densities, te, phi, inner)
+        _, sources, loss, sinks = self._reactions(densities, te)
         h = self.h
         res = np.empty((self.cells, self._nvar))
         old = None if previous is None else self._unpack(previous)
@@ -615,11 +745,60 @@ class Fluid1D:
                 w_old = 1.5 * old[0]["e"] * old[1]
                 balance = balance + (w - w_old) / dt
             res[:, len(self._names)] = balance / max(float(np.max(w)), 1.0)
+        for fluid in self.species:
+            if fluid.momentum:
+                column = self._flux_column[fluid.name]
+                res[:-1, column] = self._momentum_residual(
+                    fluid,
+                    densities[fluid.name],
+                    fluxes[fluid.name],
+                    efield,
+                    sinks[fluid.name],
+                    te,
+                    None if old is None else old[3][fluid.name],
+                    dt,
+                )
+                res[-1, column] = unknowns.reshape(self.cells, self._nvar)[-1, column]
         charge = sum(f.species.charge * densities[f.name] for f in self.species)
         laplacian = np.empty(self.cells)
         laplacian[:] = (efield[:-1] - efield[1:]) / h  # d^2 phi/dx^2 = -dE/dx
         res[:, -1] = (laplacian + E * charge / EPSILON_0) * h * h
         return res.ravel()
+
+    def _momentum_residual(self, fluid, n, flux, efield, sink, te, old, dt):
+        """The momentum balance on the faces between cells, scaled."""
+        h = self.h
+        mass = fluid.species.mass
+        tg = self.gas_temperature
+        inner = flux[1:-1]
+        # the electric and pressure force, (e / mu) times the drift-diffusion flux
+        sg = self._sg(
+            fluid.species.charge,
+            np.full(self.cells - 1, fluid.mobility),
+            np.full(self.cells - 1, fluid.mobility * tg),
+            efield[1:-1],
+            n[:-1],
+            n[1:],
+            h,
+        )
+        friction = E / (mass * fluid.mobility)
+        # Gamma^2 / n on the cells, upwind: from the face the flow comes through
+        face = np.concatenate([n[:1], 0.5 * (n[:-1] + n[1:]), n[-1:]])
+        carried = flux**2 / face
+        rightward = flux[:-1] + flux[1:] > 0.0
+        convection = np.where(rightward, carried[:-1], carried[1:])
+        rate = sink / n
+        loss = 0.5 * (rate[:-1] + rate[1:])
+        balance = (
+            (convection[1:] - convection[:-1]) / h
+            - friction * sg
+            + (friction + loss) * inner
+        )
+        if old is not None:
+            balance = balance + (inner - old) / dt
+        sound = E * (float(np.mean(te)) + tg) / mass
+        scale = max(float(np.max(n)), 1.0) * sound / self.length
+        return balance / scale
 
     def _jacobian(self, unknowns: np.ndarray, previous, dt) -> sp.csc_matrix:
         """The Jacobian by finite differences, three cells apart per evaluation."""
@@ -656,8 +835,10 @@ class Fluid1D:
         """Solve the (backward Euler or steady) equations; return the solution and success."""
         u = unknowns.copy()
         log_columns = np.ones(self._nvar, dtype=bool)
-        log_columns[-1] = False
+        log_columns[-1] = False  # the potential
+        log_columns[list(self._flux_column.values())] = False  # fluxes with momentum
         is_log = np.tile(log_columns, self.cells)
+        linear = np.flatnonzero(~log_columns)
         for _ in range(max_iterations):
             residual = self._residual(u, previous, dt)
             jacobian = self._jacobian(u, previous, dt)
@@ -673,10 +854,12 @@ class Fluid1D:
             if largest > MAX_LOG_STEP:
                 delta *= MAX_LOG_STEP / largest
             u = u + delta
-            phi_scale = 1.0 + float(np.max(np.abs(u[~is_log])))
-            if (
-                np.max(np.abs(delta[is_log])) < NEWTON_TOLERANCE
-                and np.max(np.abs(delta[~is_log])) < NEWTON_TOLERANCE * phi_scale
+            # the potential and the fluxes each converge relative to their own size
+            columns = u.reshape(self.cells, self._nvar)[:, linear]
+            changes = delta.reshape(self.cells, self._nvar)[:, linear]
+            scales = 1.0 + np.max(np.abs(columns), axis=0)
+            if np.max(np.abs(delta[is_log])) < NEWTON_TOLERANCE and np.all(
+                np.max(np.abs(changes), axis=0) < NEWTON_TOLERANCE * scales
             ):
                 return u, True
         return u, False
@@ -741,9 +924,9 @@ class Fluid1D:
         self, unknowns: np.ndarray, time: float = 0.0, converged: bool = True
     ) -> FluidState:
         """The :class:`FluidState` of a vector of unknowns."""
-        densities, te, phi = self._unpack(unknowns)
-        fluxes, _ = self._fluxes(densities, te, phi)
-        rates, _, _ = self._reactions(densities, te)
+        densities, te, phi, inner = self._unpack(unknowns)
+        fluxes, _ = self._fluxes(densities, te, phi, inner)
+        rates, _, _, _ = self._reactions(densities, te)
         return FluidState(
             x=self.x.copy(),
             faces=self.faces.copy(),
@@ -767,11 +950,11 @@ class Fluid1D:
         if not self._energy:
             raise ValueError("isothermal electrons have no energy balance")
         unknowns = self.pack(
-            state.densities, state.electron_temperature, state.potential
+            state.densities, state.electron_temperature, state.potential, state.fluxes
         )
-        densities, te, phi = self._unpack(unknowns)
-        fluxes, efield = self._fluxes(densities, te, phi)
-        _, _, loss = self._reactions(densities, te)
+        densities, te, phi, inner = self._unpack(unknowns)
+        fluxes, efield = self._fluxes(densities, te, phi, inner)
+        _, _, loss, _ = self._reactions(densities, te)
         rates = self._source_rates({**self._fixed, **densities}, te)
         gained = sum(
             (
@@ -797,10 +980,10 @@ class Fluid1D:
         In m^-2 s^-1 (per unit area of the slab); zero at a steady state.
         """
         unknowns = self.pack(
-            state.densities, state.electron_temperature, state.potential
+            state.densities, state.electron_temperature, state.potential, state.fluxes
         )
-        densities, te, _ = self._unpack(unknowns)
-        _, sources, _ = self._reactions(densities, te)
+        densities, te, _, _ = self._unpack(unknowns)
+        _, sources, _, _ = self._reactions(densities, te)
         out = {}
         for name in self._names:
             outflow = state.fluxes[name][-1] - state.fluxes[name][0]

@@ -1,4 +1,4 @@
-"""Regions of the plane, marked on the cells of a :class:`~wellbalanced.spatial.grid.CellGrid`.
+"""Regions of the plane, marked on the cells of a grid (tensor or patches).
 
 A :class:`PlasmaRegion` is where the plasma is (the driver and the expansion region,
 say): the union of its shapes minus the excluded ones. The spatial models set the plasma
@@ -11,11 +11,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from wellbalanced.spatial.grid import CellGrid
+if TYPE_CHECKING:
+    from wellbalanced.spatial.grid import CellGrid
+    from wellbalanced.spatial.patches import PatchGrid
 
 __all__ = ["PlasmaRegion"]
 
@@ -38,24 +40,17 @@ class PlasmaRegion:
         if not self.shapes:
             raise ValueError("a plasma region needs at least one shape")
 
-    def mask(self, grid: CellGrid) -> np.ndarray:
+    def mask(self, grid: CellGrid | PatchGrid) -> np.ndarray:
         """The cells whose centre is in the region, shape ``grid.shape``."""
         inside = grid.union_mask(self.shapes)
         if self.excluded:
             inside &= ~grid.union_mask(self.excluded)
         return inside
 
-    def wall_faces(self, grid: CellGrid) -> np.ndarray:
+    def wall_faces(self, grid: CellGrid | PatchGrid) -> np.ndarray:
         """The region's cells that have a neighbour outside it (or the domain edge).
 
-        The cells next to a wall, where a fluid model applies its wall conditions.
+        The cells next to a wall, where a fluid model applies its wall conditions; the
+        axis of an r–z domain and periodic seams are not walls.
         """
-        inside = self.mask(grid)
-        padded = np.pad(inside, 1, constant_values=False)
-        neighbours_inside = (
-            padded[:-2, 1:-1] & padded[2:, 1:-1] & padded[1:-1, :-2] & padded[1:-1, 2:]
-        )
-        if grid.cylindrical and grid.x_edges[0] == 0.0:
-            # the axis is not a wall
-            neighbours_inside[0, :] = padded[2, 1:-1] & padded[1, :-2] & padded[1, 2:]
-        return inside & ~neighbours_inside
+        return grid.wall_cells(self.mask(grid))

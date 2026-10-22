@@ -44,6 +44,8 @@ optional-dependencies.docs = [
   "nbformat>=5.11.1",
   "simgeometry>=0.1.1",
 ]
+# the patch grid of wellbalanced.spatial needs patchwork, installed from git: "patchwork" on
+# PyPI is an unrelated project, so it must never be listed here (see picnic's pyproject)
 optional-dependencies.spatial = [ "simgeometry>=0.1.1" ]
 optional-dependencies.test = [ "pytest", "pytest-cov", "simgeometry>=0.1.1" ]
 urls.Source = "https://github.com/max-models/wellbalanced"

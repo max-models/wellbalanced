@@ -2,6 +2,7 @@
 
 Closed forms: a line current ``A_z = -mu0 I / (2 pi) ln r``, its field
 ``mu0 I / (2 pi r)``; a conducting half-space ``A_z ~ exp(-sqrt(i omega mu0 sigma) x)``.
+Every check runs on the tensor grid and on refined patches (``kind``).
 """
 
 from __future__ import annotations
@@ -14,9 +15,11 @@ from scipy.constants import mu_0 as MU_0
 from wellbalanced.spatial import (
     Conductor,
     InductiveField2D,
+    PatchGrid,
     Winding,
     stretched_edges,
 )
+from wellbalanced.tests.unit._grids import GRIDS, field, needs_patchwork, value_at
 
 simgeometry = pytest.importorskip("simgeometry")
 Circle, Rectangle = simgeometry.Circle, simgeometry.Rectangle
@@ -28,18 +31,10 @@ def square(centre, side):
     return Rectangle(centre, (side, side))
 
 
-def line_current_model(spacing=1e-3, half=0.4, windings=None, **settings):
+def line_current_model(kind, spacing=1e-3, half=0.4, windings=None, **settings):
     edges = stretched_edges(-half, half, -0.03, 0.03, spacing, ratio=1.08)
     windings = windings or [Winding(square((0.0, 0.0), 2.0 * spacing))]
-    return InductiveField2D(
-        edges, edges, frequency=FREQUENCY, windings=windings, **settings
-    )
-
-
-def value_at(solution, array, x, y):
-    i = np.argmin(np.abs(solution.x - x))
-    j = np.argmin(np.abs(solution.y - y))
-    return array[i, j], solution.x[i], solution.y[j]
+    return field(kind, edges, edges, frequency=FREQUENCY, windings=windings, **settings)
 
 
 def test_stretched_edges_cover_the_interval():
@@ -50,8 +45,9 @@ def test_stretched_edges_cover_the_interval():
     np.testing.assert_allclose(core, 0.01)
 
 
-def test_line_current_potential_and_field():
-    model = line_current_model()
+@pytest.mark.parametrize("kind", GRIDS)
+def test_line_current_potential_and_field(kind):
+    model = line_current_model(kind)
     solution = model.solve(100.0)
     a = solution.vector_potential
     # A(r1) - A(r2) = -mu0 I / (2 pi) ln(r1 / r2) for r small against the box
@@ -65,13 +61,14 @@ def test_line_current_potential_and_field():
         assert abs(abs(b) - MU_0 * 100.0 / (2 * np.pi * x)) < 5e-3 * abs(b)
 
 
-def test_pair_of_opposite_currents():
+@pytest.mark.parametrize("kind", GRIDS)
+def test_pair_of_opposite_currents(kind):
     spacing, d = 1e-3, 0.02
     windings = [
         Winding(square((-d / 2, 0.0), 2 * spacing), +1.0),
         Winding(square((d / 2, 0.0), 2 * spacing), -1.0),
     ]
-    model = line_current_model(windings=windings)
+    model = line_current_model(kind, windings=windings)
     solution = model.solve(50.0)
     a = solution.vector_potential
     for x, y in ((0.0, 0.01), (0.02, 0.005), (-0.025, -0.01)):
@@ -82,13 +79,15 @@ def test_pair_of_opposite_currents():
         assert abs(value - expected) < 5e-3 * MU_0 * 50.0 / (2 * np.pi)
 
 
-def test_skin_depth_of_a_conducting_half_space():
+@pytest.mark.parametrize("kind", GRIDS)
+def test_skin_depth_of_a_conducting_half_space(kind):
     # 1D: periodic along y with one cell, a current sheet at x ~ 0, a plasma beyond
     density, nu = 1.0e18, 1.0e7
     edges_x = np.linspace(0.0, 0.2, 2001)
     plasma_start = 0.05
     density_of = lambda x, y: np.where(x > plasma_start, density, 0.0)  # noqa: E731
-    model = InductiveField2D(
+    model = field(
+        kind,
         edges_x,
         [0.0, 1.0],
         frequency=FREQUENCY,
@@ -101,42 +100,52 @@ def test_skin_depth_of_a_conducting_half_space():
     omega = 2 * np.pi * FREQUENCY
     sigma = density * ELEMENTARY_CHARGE**2 / (ELECTRON_MASS * (nu + 1j * omega))
     k = np.sqrt(1j * omega * MU_0 * sigma)
-    a = solution.vector_potential[:, 0]
-    x = solution.x
-    i1 = np.argmin(np.abs(x - (plasma_start + 0.005)))
-    i2 = np.argmin(np.abs(x - (plasma_start + 0.015)))
-    k_numerical = -np.log(a[i2] / a[i1]) / (x[i2] - x[i1])
+    a = solution.vector_potential
+    a1, x1, _ = value_at(solution, a, plasma_start + 0.005, 0.5)
+    a2, x2, _ = value_at(solution, a, plasma_start + 0.015, 0.5)
+    k_numerical = -np.log(a2 / a1) / (x2 - x1)
     assert abs(k_numerical - k) < 1e-3 * abs(k)
 
 
-def plasma_model(**settings):
-    edges = np.linspace(-0.1, 0.1, 81)
+def plasma_model(kind="tensor", **settings):
+    """A coil pair around a Gaussian plasma.
+
+    On patches: a 5 mm base with a 2.5 mm patch (the tensor grid's spacing) over the
+    coil and the plasma, so the shields of the conductor test sit on the base.
+    """
     windings = [
         Winding(Circle((-0.06, 0.0), 0.004), +1.0, "left"),
         Winding(Circle((0.06, 0.0), 0.004), -1.0, "right"),
     ]
     density = lambda x, y: 8e17 * np.exp(-(x**2 + y**2) / 0.03**2)  # noqa: E731
-    return InductiveField2D(
-        edges,
-        edges,
+    settings.update(
         frequency=FREQUENCY,
         windings=windings,
         electron_density=density,
         collision_frequency=2e7,
-        **settings,
     )
+    if kind == "tensor":
+        edges = np.linspace(-0.1, 0.1, 81)
+        return InductiveField2D(edges, edges, **settings)
+    needs_patchwork(kind)
+    grid = PatchGrid.refined(
+        ((-0.1, 0.1), (-0.1, 0.1)), (40, 40), [[((-0.07, 0.07), (-0.07, 0.07))]]
+    )
+    return InductiveField2D(grid=grid, **settings)
 
 
-def test_power_balance_to_round_off():
-    solution = plasma_model().solve(30.0 + 10.0j)
+@pytest.mark.parametrize("kind", GRIDS)
+def test_power_balance_to_round_off(kind):
+    solution = plasma_model(kind).solve(30.0 + 10.0j)
     assert solution.absorbed_power > 0.0
     assert abs(solution.source_power.real - solution.absorbed_power) < 1e-11 * abs(
         solution.source_power
     )
 
 
-def test_efficiency_and_power_scaling():
-    solution = plasma_model().solve(1.0)
+@pytest.mark.parametrize("kind", GRIDS)
+def test_efficiency_and_power_scaling(kind):
+    solution = plasma_model(kind).solve(1.0)
     depth = 0.3
     target = solution.for_power(25e3, depth)
     assert abs(depth * target.absorbed_power - 25e3) < 1e-9 * 25e3
@@ -147,16 +156,17 @@ def test_efficiency_and_power_scaling():
     assert abs(r_p - solution.plasma_resistance(depth)) < 1e-12 * r_p
 
 
-def test_grounded_and_floating_conductors():
+@pytest.mark.parametrize("kind", GRIDS)
+def test_grounded_and_floating_conductors(kind):
     plates = [
         Rectangle((-0.085, 0.0), (0.006, 0.12)),
         Rectangle((0.085, 0.0), (0.006, 0.12)),
     ]
-    grounded = plasma_model(conductors=[Conductor(plates, name="shield")])
+    grounded = plasma_model(kind, conductors=[Conductor(plates, name="shield")])
     floating = plasma_model(
-        conductors=[Conductor(plates, floating=True, name="shield")]
+        kind, conductors=[Conductor(plates, floating=True, name="shield")]
     )
-    free = plasma_model().solve(1.0)
+    free = plasma_model(kind).solve(1.0)
     for model in (grounded, floating):
         solution = model.solve(1.0)
         inside = model.conductor_masks[0]
@@ -177,17 +187,20 @@ def test_grounded_and_floating_conductors():
     assert grounded_solution.absorbed_power < free.absorbed_power
 
 
-def test_regions_are_checked():
+@pytest.mark.parametrize("kind", GRIDS)
+def test_regions_are_checked(kind):
     edges = np.linspace(-0.1, 0.1, 21)
     with pytest.raises(ValueError, match="covers no cell"):
-        InductiveField2D(
+        field(
+            kind,
             edges,
             edges,
             frequency=FREQUENCY,
             windings=[Winding(Circle((0.001, 0.001), 1e-4))],
         )
     with pytest.raises(ValueError, match="overlap"):
-        InductiveField2D(
+        field(
+            kind,
             edges,
             edges,
             frequency=FREQUENCY,
@@ -196,16 +209,27 @@ def test_regions_are_checked():
         )
 
 
-def test_time_dependent_reaches_the_harmonic_solution():
+@pytest.mark.parametrize("kind", GRIDS)
+def test_time_dependent_reaches_the_harmonic_solution(kind):
     # a dense, collisional plasma: the transients decay within a period
     edges = np.linspace(-0.03, 0.03, 31)
     windings = [
         Winding(Rectangle((-0.02, 0.0), (0.004, 0.004)), +1.0),
         Winding(Rectangle((0.02, 0.0), (0.004, 0.004)), -1.0),
     ]
+    if kind == "patches":
+        # a 4 mm base, the tensor grid's 2 mm over the coil and the plasma
+        needs_patchwork(kind)
+        grid = PatchGrid.refined(
+            ((-0.03, 0.03), (-0.03, 0.03)),
+            (15, 15),
+            [[((-0.025, 0.025), (-0.01, 0.01))]],
+        )
+        edges_or_grid: dict = {"grid": grid}
+    else:
+        edges_or_grid = {"x_edges": edges, "y_edges": edges}
     model = InductiveField2D(
-        edges,
-        edges,
+        **edges_or_grid,
         frequency=FREQUENCY,
         windings=windings,
         electron_density=lambda x, y: np.where(np.abs(x) < 0.012, 1e18, 0.0),

@@ -11,7 +11,8 @@ two decaying modes ``q_1, q_2``. With the electrons at rest at the surface (no s
 ``u_1 + u_2 = 0``, ``u_j = q_j^2 A_j / (mu0 e n)``) the surface admittance is
 ``-A'(0) / A(0) = q_1 q_2 / (q_1 + q_2)``, which for ``mu -> 0`` is the cold
 ``sqrt(i omega mu0 sigma)``. In the vacuum in front, driven by a current layer, ``A`` is
-piecewise linear and quadratic, so the field there follows in closed form.
+piecewise linear and quadratic, so the field there follows in closed form. Every check
+runs on the tensor grid and on refined patches (``kind``).
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from scipy.constants import m_e as M_E
 from scipy.constants import mu_0 as MU_0
 
 from wellbalanced.spatial import InductiveField2D, Winding, stretched_edges
+from wellbalanced.tests.unit._grids import GRIDS, field, value_at
 
 simgeometry = pytest.importorskip("simgeometry")
 Rectangle = simgeometry.Rectangle
@@ -31,7 +33,7 @@ FREQUENCY, DENSITY, NU, TE = 1.0e6, 1.0e18, 1.0e7, 10.0
 LEFT, LAYER, RIGHT = -0.05, (-0.04, -0.035), 0.6
 
 
-def slab(spacing=5e-4, **settings):
+def slab(kind="tensor", spacing=5e-4, **settings):
     """Vacuum on ``[-0.05, 0]`` with a current layer, plasma on ``[0, 0.6]``."""
     edges = np.unique(
         np.concatenate(
@@ -44,7 +46,8 @@ def slab(spacing=5e-4, **settings):
         )
     )
     s1, s2 = LAYER
-    return InductiveField2D(
+    return field(
+        kind,
         edges,
         [0.0, 1.0],
         frequency=FREQUENCY,
@@ -78,35 +81,36 @@ def vacuum_potential(x, admittance, current_density):
     return at_layer + (alpha - j * w) * (x - s2)
 
 
+@pytest.mark.parametrize("kind", GRIDS)
 @pytest.mark.parametrize("viscous", [True, False])
-def test_the_skin_layer_of_a_slab(viscous):
+def test_the_skin_layer_of_a_slab(viscous, kind):
     settings = {"electron_temperature": TE} if viscous else {}
-    model = slab(**settings)
-    solution = model.solve(1.0)
+    solution = slab(kind, **settings).solve(1.0)
     viscosity = 2.0 / 3.0 * DENSITY * E * TE / NU if viscous else 0.0
-    i = int(np.argmin(np.abs(model.x + 0.02)))
+    value, x, _ = value_at(solution, solution.vector_potential, -0.02, 0.5)
     layer_area = LAYER[1] - LAYER[0]  # times the cell's 1 m along y
-    expected = vacuum_potential(
-        model.x[i], surface_admittance(viscosity), 1.0 / layer_area
-    )
-    assert solution.vector_potential[i, 0] == pytest.approx(expected, rel=1e-4)
+    expected = vacuum_potential(x, surface_admittance(viscosity), 1.0 / layer_area)
+    assert value == pytest.approx(expected, rel=1e-4)
 
 
-def test_viscosity_widens_the_skin_layer():
-    cold = slab().solve(1.0)
-    viscous = slab(electron_temperature=TE).solve(1.0)
+def depth(solution):
+    """The power-weighted mean depth of the absorption."""
+    power = solution.power_density * solution.cell_volumes
+    x = solution.grid.xx
+    return np.sum(power * np.clip(x, 0, None)) / np.sum(power)
 
-    def depth(solution):
-        power = solution.power_density[:, 0] * solution.cell_volumes[:, 0]
-        x = solution.x
-        return np.sum(power * np.clip(x, 0, None)) / np.sum(power)
 
+@pytest.mark.parametrize("kind", GRIDS)
+def test_viscosity_widens_the_skin_layer(kind):
+    cold = slab(kind).solve(1.0)
+    viscous = slab(kind, electron_temperature=TE).solve(1.0)
     assert depth(viscous) > 2.0 * depth(cold)
 
 
-def test_no_viscosity_is_the_cold_plasma_to_round_off():
-    cold = slab().solve(1.0)
-    zero = slab(electron_viscosity=0.0).solve(1.0)
+@pytest.mark.parametrize("kind", GRIDS)
+def test_no_viscosity_is_the_cold_plasma_to_round_off(kind):
+    cold = slab(kind).solve(1.0)
+    zero = slab(kind, electron_viscosity=0.0).solve(1.0)
     np.testing.assert_allclose(
         zero.vector_potential, cold.vector_potential, rtol=1e-10, atol=1e-18
     )
@@ -114,8 +118,9 @@ def test_no_viscosity_is_the_cold_plasma_to_round_off():
     assert zero.viscous_power == pytest.approx(0.0, abs=1e-12 * cold.absorbed_power)
 
 
-def test_power_splits_into_friction_and_viscosity():
-    solution = slab(electron_temperature=TE).solve(3.0)
+@pytest.mark.parametrize("kind", GRIDS)
+def test_power_splits_into_friction_and_viscosity(kind):
+    solution = slab(kind, electron_temperature=TE).solve(3.0)
     assert solution.viscous_power > 0.0 and solution.friction_power > 0.0
     total = solution.friction_power + solution.viscous_power
     assert total == pytest.approx(solution.absorbed_power, rel=1e-9)
@@ -126,9 +131,11 @@ def test_power_splits_into_friction_and_viscosity():
     assert scaled.viscous_power == pytest.approx(4.0 * solution.viscous_power)
 
 
-def test_viscous_electrons_in_r_z_recover_the_cold_column():
+@pytest.mark.parametrize("kind", GRIDS)
+def test_viscous_electrons_in_r_z_recover_the_cold_column(kind):
     def column(**settings):
-        return InductiveField2D(
+        return field(
+            kind,
             stretched_edges(0.0, 0.2, 0.0, 0.14, 1e-3, ratio=1.1),
             np.linspace(0.0, 0.01, 3),
             frequency=FREQUENCY,
@@ -148,8 +155,9 @@ def test_viscous_electrons_in_r_z_recover_the_cold_column():
     assert zero.plasma_resistance() == pytest.approx(cold.plasma_resistance(), 1e-10)
     # the velocity vanishes on the axis and at the edge of the plasma
     assert viscous.electron_velocity is not None
-    profile = np.abs(viscous.electron_velocity[:, 0])
-    assert profile[0] < 0.1 * profile.max()
+    speed = np.abs(viscous.electron_velocity)
+    on_axis = viscous.grid.xx == viscous.grid.xx.min()
+    assert speed[on_axis].max() < 0.1 * speed.max()
     assert viscous.friction_power + viscous.viscous_power == pytest.approx(
         viscous.absorbed_power, rel=1e-9
     )

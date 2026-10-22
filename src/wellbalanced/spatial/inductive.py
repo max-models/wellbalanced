@@ -10,7 +10,10 @@ vector potential, ``a = A_z(x, y)`` in a cut or ``a = A_phi(r, z)`` in r–z:
     curl curl a = mu0 (J_coil + J_plasma),   E = -d_t a,
 
 with ``B = (d_y A_z, -d_x A_z)`` in the cut and ``B = (-d_z A_phi, (1/r) d_r (r A_phi))``
-in r–z. The grid, its metric and the operator are :class:`~wellbalanced.spatial.grid.CellGrid`'s.
+in r–z. The grid, its metric and the operator are the grid's: a tensor
+:class:`~wellbalanced.spatial.grid.CellGrid` (from cell edges), or the refined patches of a
+:class:`~wellbalanced.spatial.patches.PatchGrid` (``grid=``), where fields are arrays over
+the leaf cells.
 
 Plasma, in one of two forms:
 
@@ -67,7 +70,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import scipy.sparse as sp
@@ -85,6 +88,9 @@ from wellbalanced.spatial.grid import (
     stretched_edges,
 )
 from wellbalanced.spatial.regions import PlasmaRegion
+
+if TYPE_CHECKING:
+    from wellbalanced.spatial.patches import PatchGrid
 
 __all__ = [
     "Conductor",
@@ -139,7 +145,7 @@ class InductiveSolution:
     quantities are totals in r–z and per unit length along ``z`` in a cut.
     """
 
-    grid: CellGrid
+    grid: CellGrid | PatchGrid
     frequency: float
     coil_current: complex
     vector_potential: np.ndarray
@@ -158,12 +164,12 @@ class InductiveSolution:
 
     @property
     def x(self) -> np.ndarray:
-        """Cell centres of the first axis (``x`` or ``r``) [m]."""
+        """Cell centres of the first axis (``x`` or ``r``) [m]; per cell on patches."""
         return self.grid.x
 
     @property
     def y(self) -> np.ndarray:
-        """Cell centres of the second axis (``y`` or ``z``) [m]."""
+        """Cell centres of the second axis (``y`` or ``z``) [m]; per cell on patches."""
         return self.grid.y
 
     @property
@@ -279,7 +285,7 @@ class InductiveSolution:
         b_1, b_2 = self.magnetic_field
         first, second = self.grid.coordinate_names
         normal = "phi" if self.grid.cylindrical else "z"
-        dims = (first, second)
+        dims = self.grid.dims
         data = {
             "vector_potential": variable(
                 dims, self.vector_potential, f"vector potential A_{normal}", "T m"
@@ -332,7 +338,8 @@ class InductiveField2D:
     """The magnetoquasistatic field of coil windings, conductors and a plasma.
 
     Args:
-        x_edges: Cell edges of the first axis (``x``, or ``r`` from ``>= 0``) [m].
+        x_edges: Cell edges of the first axis (``x``, or ``r`` from ``>= 0``) [m]: a
+            tensor grid; or give ``grid``.
         y_edges: Cell edges of the second axis (``y``, or ``z``) [m].
         frequency: The driving frequency [Hz].
         windings: The coil windings; each carries ``sign`` times the coil current.
@@ -345,17 +352,21 @@ class InductiveField2D:
         electron_viscosity: ``mu_e`` [Pa s] directly, instead of from ``T_e``; zero gives
             the momentum balance without viscosity (the cold plasma, solved with ``u``).
         plasma_region: Where the plasma is; everywhere if ``None``.
-        boundaries: The boundary of each axis (see :class:`CellGrid`).
+        boundaries: The boundary of each axis (see :class:`CellGrid`); default
+            ``("dirichlet", "dirichlet")``, or the grid's.
         geometry: ``"cartesian"`` (a cut, ``A_z``) or ``"cylindrical"`` (r–z,
-            ``A_phi``).
+            ``A_phi``); default ``"cartesian"``, or the grid's.
         electron_drift: The in-plane electron velocity for the RF Lorentz force; not
             implemented until ``Fluid2D`` provides it.
+        grid: A grid instead of the edges, e.g. a
+            :class:`~wellbalanced.spatial.patches.PatchGrid` (its geometry and
+            boundaries are the model's).
     """
 
     def __init__(
         self,
-        x_edges: Sequence[float] | np.ndarray,
-        y_edges: Sequence[float] | np.ndarray,
+        x_edges: Sequence[float] | np.ndarray | None = None,
+        y_edges: Sequence[float] | np.ndarray | None = None,
         *,
         frequency: float,
         windings: Sequence[Winding] = (),
@@ -365,9 +376,10 @@ class InductiveField2D:
         electron_temperature: CellField | None = None,
         electron_viscosity: CellField | None = None,
         plasma_region: PlasmaRegion | None = None,
-        boundaries: tuple[AxisBoundary, AxisBoundary] = ("dirichlet", "dirichlet"),
-        geometry: Geometry = "cartesian",
+        boundaries: tuple[AxisBoundary, AxisBoundary] | None = None,
+        geometry: Geometry | None = None,
         electron_drift: Any = None,
+        grid: CellGrid | PatchGrid | None = None,
     ) -> None:
         """Mark the regions on the grid and assemble the field operator."""
         if frequency <= 0.0:
@@ -376,8 +388,23 @@ class InductiveField2D:
             raise NotImplementedError(
                 "the RF Lorentz force needs the in-plane electron velocity of Fluid2D"
             )
-        self.grid = CellGrid(x_edges, y_edges, geometry=geometry, boundaries=boundaries)
-        grid = self.grid
+        if grid is None:
+            if x_edges is None or y_edges is None:
+                raise ValueError("give the cell edges or a grid")
+            grid = CellGrid(
+                x_edges,
+                y_edges,
+                geometry=geometry or "cartesian",
+                boundaries=boundaries or ("dirichlet", "dirichlet"),
+            )
+        else:
+            if x_edges is not None or y_edges is not None:
+                raise ValueError("give either the cell edges or a grid, not both")
+            if geometry is not None and geometry != grid.geometry:
+                raise ValueError(f"the grid's geometry is {grid.geometry!r}")
+            if boundaries is not None and tuple(boundaries) != grid.boundaries:
+                raise ValueError(f"the grid's boundaries are {grid.boundaries!r}")
+        self.grid: CellGrid | PatchGrid = grid
         self.frequency = float(frequency)
         self.windings = tuple(windings)
         self.conductors = tuple(conductors)
@@ -415,8 +442,8 @@ class InductiveField2D:
         return self.grid.y
 
     @property
-    def shape(self) -> tuple[int, int]:
-        """The number of cells along each axis."""
+    def shape(self) -> tuple[int, ...]:
+        """The shape of a field: cells along each axis, or ``(n,)`` leaf cells."""
         return self.grid.shape
 
     # --- regions -----------------------------------------------------------------

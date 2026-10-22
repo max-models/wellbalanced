@@ -7,6 +7,18 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `PatchGrid`: the leaf cells of a patchwork hierarchy as the grid of `wellbalanced.spatial`,
+  with `CellGrid`'s interface (fields over the leaf cells, shape `(n,)`): `refined` (boxes or
+  a function per level), `from_edges` (about as fine as a tensor grid, for comparisons),
+  `refined_where` (one level finer where a field is large, e.g. the skin layer).
+  `InductiveField2D(grid=...)`, the cold and viscous solvers, grounded and floating conductors,
+  the curl, `DriverCoupling` and `PlasmaRegion` run on it; every closed-form check of the
+  field models runs on both grids. The r–z BUG example on patches: a third of the cells, the
+  same coil currents and efficiencies, four times faster. patchwork is installed from git
+  (the name is taken on PyPI); the patch-grid tests skip without it.
+- `CellGrid.dims`, `.locate` and `.wall_cells`; `PlasmaRegion.wall_faces` goes through the
+  grid (periodic seams are no walls now).
+
 - `wellbalanced.spatial`: the spatially resolved models in one subpackage, on one cell
   grid (`CellGrid`: edges, centres, cell volumes and face areas, the x–y or r–z metric,
   shape masks and the curl-curl operator; the only place the geometry enters).

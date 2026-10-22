@@ -78,6 +78,11 @@ state = model.steady_state(model.pack({"e": guess, "Ar+": guess}, 3.0, 0.0))
 print(state.densities["e"].max(), model.energy_balance(state))
 ```
 
+`FluidSpecies(argon_ion, mobility=10.0, momentum=True)` gives the ions their momentum
+equation instead of drift-diffusion (the friction on the gas from the mobility), so they
+accelerate through a presheath to the Bohm speed and on through the sheath; with a large
+mobility the ions are collisionless.
+
 Boundaries are set per species and end, and can be changed between steps:
 `model.set_boundary("left", "e", Boundary.flux(1e16))`. Resolve the Debye length with the
 cells: with an unresolved sheath Newton's method cannot take long implicit steps.

@@ -22,9 +22,12 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   scans that continue from one steady state to the next.
 - **1D fluid model** (`Fluid1D`): drift-diffusion of every species with
   Scharfetter-Gummel fluxes, the electron energy equation and Poisson’s
-  equation, fully implicit. Walls, prescribed densities or fluxes at
-  either end, changeable between steps, as the fluid side of a coupling
-  to a particle code.
+  equation, fully implicit. Ions may carry their momentum equation
+  instead (friction from their mobility), so they reach the Bohm speed
+  at the sheath edge; checked against the closed-form collisionless
+  presheath. Walls, prescribed densities or fluxes at either end,
+  changeable between steps, as the fluid side of a coupling to a
+  particle code.
 - **2D axial-azimuthal drift fluid of a magnetron** (`DriftFluid2D`):
   magnetised electrons with the Hall tensor, inertial ions, neutral
   depletion and refill, the electron energy and a semi-implicit Poisson

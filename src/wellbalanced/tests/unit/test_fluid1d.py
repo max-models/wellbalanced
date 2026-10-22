@@ -132,11 +132,12 @@ def test_collisional_ions_with_momentum_drift_and_diffuse() -> None:
     assert inertial[20:-20] == pytest.approx(drift[20:-20], rel=2e-4)
 
 
+@pytest.mark.parametrize("share", [0.5, 0.25])
 @pytest.mark.parametrize(
     ("density", "cells", "tolerance"), [(1.0e15, 400, 0.05), (1.0e16, 1200, 0.02)]
 )
 def test_a_collisionless_presheath_reaches_the_bohm_speed(
-    density: float, cells: int, tolerance: float
+    density: float, cells: int, tolerance: float, share: float
 ) -> None:
     """Cold ions from a uniform source, Boltzmann electrons, a wall: the presheath.
 
@@ -160,7 +161,10 @@ def test_a_collisionless_presheath_reaches_the_bohm_speed(
             FluidSpecies(ION, 1.0e3, momentum=True),
         ],
         sources={"e": source, "Ar+": source},
-        boundaries={"left": {"e": Boundary.symmetry(), "Ar+": Boundary.symmetry()}},
+        boundaries={
+            "left": {"e": Boundary.symmetry(), "Ar+": Boundary.symmetry()},
+            "right": {"e": Boundary.wall(thermal_share=share)},
+        },
         potential={"left": PotentialBoundary.field(0.0)},
     )
     guess = density * (1.0 - 0.5 * (model.x / length) ** 2)
@@ -199,13 +203,12 @@ def test_a_collisionless_presheath_reaches_the_bohm_speed(
     # every ion made leaves through the wall, with as many electrons (floating)
     assert state.fluxes["Ar+"][-1] == pytest.approx(source * length, rel=1e-10)
     assert state.fluxes["e"][-1] == pytest.approx(source * length, rel=1e-10)
-    # the sheath: the electrons' wall flux, half the thermal flux of the density in
-    # the wall cell (Hagelaar et al. 2000), balances the Bohm flux. With Boltzmann
-    # electrons that is T_e ln(v_e / (2 c_s)); a full Maxwellian at the sheath edge
-    # (kinetic theory) gives T_e ln(v_e / (4 c_s)), ln 2 less.
+    # the floating sheath: the electrons' wall flux, s v_e n of the wall cell, balances
+    # the Bohm flux; with Boltzmann electrons the drop is T_e ln(s v_e / c_s). s = 1/4
+    # is kinetic theory's (a full Maxwellian), s = 1/2 (Hagelaar et al.) is ln 2 more.
     mean_speed = np.sqrt(8.0 * E * TE / (np.pi * ELECTRON_MASS))
     sheath = np.interp(sonic, model.x, state.potential) / TE
-    assert sheath == pytest.approx(np.log(mean_speed / (2.0 * sound)), rel=0.05)
+    assert sheath == pytest.approx(np.log(share * mean_speed / sound), rel=0.05)
 
 
 def test_a_discharge_sustains_itself_and_closes_its_balances() -> None:
@@ -331,6 +334,8 @@ def test_bad_models_are_refused() -> None:
         FluidSpecies(ION)
     with pytest.raises(ValueError, match="for ion species"):
         FluidSpecies(ELECTRON, 30.0, momentum=True)
+    with pytest.raises(ValueError, match="thermal_share"):
+        Boundary.wall(thermal_share=0.0)
     with pytest.raises(ValueError, match="gas temperature"):
         FluidSpecies(ION, 0.1, diffusion=1.0, momentum=True)
     with pytest.raises(ValueError, match="unknown species"):

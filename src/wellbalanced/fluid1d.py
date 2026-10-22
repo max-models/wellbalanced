@@ -147,18 +147,30 @@ class Boundary:
     Use the constructors: :meth:`wall`, :meth:`density`, :meth:`flux`,
     :meth:`symmetry`. ``value`` is the density (m^-3) or the flux into the
     domain (m^-2 s^-1); ``temperature`` (eV) the electron temperature of a
-    prescribed electron density; ``reflection`` the wall's reflection coefficient.
+    prescribed electron density; ``reflection`` the wall's reflection
+    coefficient; ``thermal_share`` the share of ``v_th n`` a wall takes.
     """
 
     kind: str
     value: float = 0.0
     temperature: float | None = None
     reflection: float = 0.0
+    thermal_share: float = 0.5
 
     @classmethod
-    def wall(cls, reflection: float = 0.0) -> Boundary:
-        """An absorbing wall: outflow ``(1 - r)/(1 + r) (max(v_drift, 0) + v_th / 2) n``."""
-        return cls("wall", reflection=reflection)
+    def wall(cls, reflection: float = 0.0, thermal_share: float = 0.5) -> Boundary:
+        """An absorbing wall: outflow ``(1 - r)/(1 + r) (max(v_drift, 0) + s v_th) n``.
+
+        ``v_th`` is the mean thermal speed and ``n`` the density of the cell
+        next to the wall. ``s = 1/2`` (Hagelaar et al. 2000) takes ``n`` as the
+        density of the half-Maxwellian leaving at the wall; ``s = 1/4`` as that
+        of a full Maxwellian, as kinetic sheath theory and the global model do
+        for the electrons of a resolved sheath, whose density the fluid follows
+        to the wall (Boltzmann). Their floating sheaths differ by ``T_e ln 2``.
+        """
+        if not 0.0 < thermal_share <= 0.5:
+            raise ValueError("thermal_share must be in (0, 1/2]")
+        return cls("wall", reflection=reflection, thermal_share=thermal_share)
 
     @classmethod
     def density(cls, value: float, temperature: float | None = None) -> Boundary:
@@ -569,10 +581,12 @@ class Fluid1D:
         temperature = te_cell if fluid.name == "e" else self.gas_temperature
         thermal = np.sqrt(8.0 * E * temperature / (np.pi * fluid.species.mass))
         drift = max(z * mu * efield * outward, 0.0)  # outward drift speed
+        share = condition.thermal_share
         if energy:
-            outflow = scale * drift * n_cell + (2.0 / 3.0) * thermal * n_cell
+            # 2 T per electron of the thermal flux: (4/3) s v_th w
+            outflow = scale * drift * n_cell + (4.0 / 3.0) * share * thermal * n_cell
         else:
-            outflow = drift * n_cell + 0.5 * thermal * n_cell
+            outflow = drift * n_cell + share * thermal * n_cell
         return float(outward * (1.0 - r) / (1.0 + r) * outflow)
 
     def _momentum_boundary(
@@ -619,7 +633,7 @@ class Fluid1D:
         drift = 2.0 * c / (b + np.sqrt(b * b + 4.0 * a * c)) if c > 0.0 else 0.0
         r = condition.reflection
         thermal = np.sqrt(8.0 * E * self.gas_temperature / (np.pi * mass))
-        outflow = drift + 0.5 * thermal * n_cell
+        outflow = drift + condition.thermal_share * thermal * n_cell
         return float(outward * (1.0 - r) / (1.0 + r) * outflow)
 
     def _fluxes(self, densities, te, phi, inner=None):

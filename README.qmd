@@ -109,6 +109,24 @@ the linters:
 pip install -e ".[dev]"
 ```
 
+## Profiling
+
+The solves, time steps and runs (`GlobalModel.steady_state` and `evolve`, `Fluid1D`'s
+Newton solves, the `step` and `run` of `GasDynamics` and `DriftFluid2D`,
+`Neutralizer.solve`, ...) carry [scope-profiler](https://github.com/max-models/scope-profiler)
+regions named `wellbalanced.<Class>.<method>`. They are off by default (a region that is
+off costs about 0.1 µs per call); an application that profiles itself turns them on with the opt-in tag
+`wellbalanced`:
+
+```python
+import scope_profiler as sp
+
+sp.setup(enable_tags=["wellbalanced"])  # or session(enable_tags=...)
+```
+
+or, without changing the code, `SCOPE_PROFILER_ENABLE_TAGS=wellbalanced` or
+`scope-profiler run --enable-tag wellbalanced script.py`.
+
 ## Development
 
 Formatting and linting use [ruff](https://docs.astral.sh/ruff/), type checking

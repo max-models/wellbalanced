@@ -103,7 +103,9 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import xarray as xr
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
+from scope_profiler import profile
 
+from wellbalanced._profiling import _PROFILE_TAGS
 from wellbalanced.datasets import variable
 
 __all__ = [
@@ -1112,6 +1114,7 @@ class DriftFluid2D:
 
     # -- the potential ----------------------------------------------------------------
 
+    @profile("wellbalanced.DriftFluid2D.solve_potential", tags=_PROFILE_TAGS)
     def _solve_potential(self, ne, ni, te, gas, dtau, gam_ix, gam_iy, lagged):
         """Implicit-permittivity Poisson solve for the potential at the end of an Euler step."""
         nx, ny = self.nx, self.ny
@@ -1279,6 +1282,7 @@ class DriftFluid2D:
                 du[key] = du[key] + source
         return du, phi
 
+    @profile("wellbalanced.DriftFluid2D.linear_modes", tags=_PROFILE_TAGS)
     def linear_modes(
         self,
         state: DriftFluid2DState,
@@ -1453,6 +1457,7 @@ class DriftFluid2D:
             out[key] = new
         return out, phi
 
+    @profile("wellbalanced.DriftFluid2D.step", tags=_PROFILE_TAGS)
     def step(self, state: DriftFluid2DState, dt: float) -> DriftFluid2DState:
         """Advance by ``dt`` with SSP-RK3; the potential of the result is that of the last stage."""
         u0 = self._pack(state)
@@ -1489,6 +1494,7 @@ class DriftFluid2D:
         diffusive = 0.5 * cfl / (diffusivity * (1.0 / self.dx**2 + 1.0 / self.dy**2))
         return min(step, diffusive)
 
+    @profile("wellbalanced.DriftFluid2D.run", tags=_PROFILE_TAGS)
     def run(
         self,
         state: DriftFluid2DState,

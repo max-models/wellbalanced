@@ -49,7 +49,9 @@ import numpy as np
 import xarray as xr
 from plasmacoll import ChargeStateTransitions, charge_state_fractions
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
+from scope_profiler import profile
 
+from wellbalanced._profiling import _PROFILE_TAGS
 from wellbalanced.datasets import variable
 from wellbalanced.global_model import (
     Chamber,
@@ -408,6 +410,7 @@ class Neutralizer:
 
     # -- solving --------------------------------------------------------------------
 
+    @profile("wellbalanced.Neutralizer.solve", tags=_PROFILE_TAGS)
     def solve(self, guess: GlobalState | None = None) -> NeutralizerResult:
         """Iterate the beam fractions and the plasma to a fixed point."""
         tg = (

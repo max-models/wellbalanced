@@ -41,7 +41,9 @@ import xarray as xr
 from plasmacoll.constants import BOLTZMANN, ELECTRON_MASS, ELEMENTARY_CHARGE
 from scipy.integrate import solve_ivp
 from scipy.optimize import root
+from scope_profiler import profile
 
+from wellbalanced._profiling import _PROFILE_TAGS
 from wellbalanced.datasets import variable
 from wellbalanced.reactions import Reaction
 from wellbalanced.species import Species
@@ -601,6 +603,7 @@ class GlobalModel:
 
     # -- solving ----------------------------------------------------------------------
 
+    @profile("wellbalanced.GlobalModel.steady_state", tags=_PROFILE_TAGS)
     def steady_state(
         self,
         initial: Mapping[str, float] | GlobalState | None = None,
@@ -642,6 +645,7 @@ class GlobalModel:
         converged = bool(residual < tolerance * self._scale(state))
         return self.evaluate(state, converged=converged)
 
+    @profile("wellbalanced.GlobalModel.evolve", tags=_PROFILE_TAGS)
     def evolve(
         self,
         times: Sequence[float] | np.ndarray,

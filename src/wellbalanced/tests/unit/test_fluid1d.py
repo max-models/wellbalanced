@@ -8,9 +8,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from plasmacoll import CrossSection
-from plasmacoll.constants import ELECTRON_MASS
+from plasmacoll.constants import ELECTRON_MASS, ELEMENTARY_CHARGE
 
-from wellbalanced import ELECTRON, Reaction, Species
+from wellbalanced import ELECTRON, Reaction, Species, VolumeSource
 from wellbalanced.fluid1d import (
     Boundary,
     Fluid1D,
@@ -20,6 +20,8 @@ from wellbalanced.fluid1d import (
 
 ION = Species.atomic("Ar+", 39.948, 1)
 TE, TG = 2.0, 0.025
+E = ELEMENTARY_CHARGE
+EPSILON_0 = 8.8541878128e-12
 
 
 def plasma(length: float, cells: int, **settings) -> Fluid1D:
@@ -49,11 +51,16 @@ def test_a_vacuum_gap_has_a_linear_potential() -> None:
     assert phi == pytest.approx(100.0 * model.x / 0.01, abs=1e-6)
 
 
-def test_a_closed_box_conserves_every_species() -> None:
+@pytest.mark.parametrize("momentum", [False, True])
+def test_a_closed_box_conserves_every_species(momentum: bool) -> None:
     closed = {name: Boundary.symmetry() for name in ("e", "Ar+")}
     model = plasma(
         0.01,
         60,
+        species=[
+            FluidSpecies(ELECTRON, 30.0),
+            FluidSpecies(ION, 0.1, momentum=momentum),
+        ],
         boundaries={"left": dict(closed), "right": dict(closed)},
         potential={"right": PotentialBoundary.field(0.0)},
     )
@@ -95,6 +102,110 @@ def test_ambipolar_diffusion_from_a_uniform_source_is_a_parabola(
     # quasi-neutral in the middle
     middle = np.abs(model.x - length / 2) < 0.25 * length
     assert state.densities["e"][middle] == pytest.approx(density[middle], rel=1e-3)
+
+
+def test_collisional_ions_with_momentum_drift_and_diffuse() -> None:
+    """With strong friction the momentum equation is drift-diffusion: the same profile."""
+    mu_e, mu_i, length, peak = 30.0, 0.01, 0.05, 1.0e16
+    d_a = mu_i * mu_e / (mu_i + mu_e) * (TE + TG)
+    source = 8.0 * d_a * peak / length**2
+    states = []
+    for momentum in (False, True):
+        model = plasma(
+            length,
+            200,
+            species=[
+                FluidSpecies(ELECTRON, mu_e),
+                FluidSpecies(ION, mu_i, momentum=momentum),
+            ],
+            sources={"e": source, "Ar+": source},
+        )
+        guess = 0.5 * peak * np.sin(np.pi * model.x / length) + 1e10
+        state = model.steady_state(model.pack({"e": guess, "Ar+": guess}, TE, 0.0))
+        assert state.converged
+        for imbalance in model.balance(state).values():
+            assert abs(imbalance) < 1e-10 * source * length
+        states.append(state)
+    drift, inertial = (s.densities["Ar+"] for s in states)
+    # inertia is left only in the sheaths, where the ions are fastest
+    assert inertial == pytest.approx(drift, rel=5e-3)
+    assert inertial[20:-20] == pytest.approx(drift[20:-20], rel=2e-4)
+
+
+@pytest.mark.parametrize(
+    ("density", "cells", "tolerance"), [(1.0e15, 400, 0.05), (1.0e16, 1200, 0.02)]
+)
+def test_a_collisionless_presheath_reaches_the_bohm_speed(
+    density: float, cells: int, tolerance: float
+) -> None:
+    """Cold ions from a uniform source, Boltzmann electrons, a wall: the presheath.
+
+    Quasi-neutral, the total pressure ``n (M u^2 + e (T_e + T_i))`` is constant and
+    ``n u = S x``, so with ``M = u / c_s``: ``n = n_0 / (1 + M^2)`` and
+    ``M / (1 + M^2) = x / (2 x_s)``, with the sonic point ``x_s = n_0 c_s / (2 S)``,
+    half the central density and ``T_e ln 2`` below the centre (e.g. Stangeby, *The
+    Plasma Boundary of Magnetic Fusion Devices*, ch. 10). The sheath sits between the
+    sonic point and the wall, a few Debye lengths thick; the errors shrink with the
+    Debye length over the size.
+    """
+    length = 0.05
+    sound = np.sqrt(E * (TE + TG) / ION.mass)
+    source = density * sound / (2.0 * length)  # the sonic point at the wall
+    model = plasma(
+        length,
+        cells,
+        # Boltzmann electrons, ions without friction
+        species=[
+            FluidSpecies(ELECTRON, 1.0e4),
+            FluidSpecies(ION, 1.0e3, momentum=True),
+        ],
+        sources={"e": source, "Ar+": source},
+        boundaries={"left": {"e": Boundary.symmetry(), "Ar+": Boundary.symmetry()}},
+        potential={"left": PotentialBoundary.field(0.0)},
+    )
+    guess = density * (1.0 - 0.5 * (model.x / length) ** 2)
+    phi = TE * np.log(guess / guess[-1]) + 5.0 * TE
+    start = model.pack(
+        {"e": guess, "Ar+": guess}, TE, phi, {"Ar+": source * model.faces}
+    )
+    state = model.steady_state(start)
+    assert state.converged
+    ions, electrons = state.densities["Ar+"], state.densities["e"]
+    mach = state.velocity("Ar+") / sound
+    # the Bohm criterion: the ions reach the sound speed, then go supersonic to the wall
+    first = int(np.argmax(mach >= 1.0))
+    sonic = float(
+        np.interp(1.0, mach[first - 1 : first + 1], model.faces[first - 1 : first + 1])
+    )
+    debye = np.sqrt(EPSILON_0 * TE / (E * density))
+    assert 0.0 < length - sonic < 15.0 * debye
+    assert mach[-1] > 3.0
+    # where the ions turn sonic the plasma is still (nearly) quasi-neutral
+    separation = np.interp(sonic, model.x, (ions - electrons) / ions)
+    assert 0.0 < separation < tolerance
+    # the presheath against the closed form, with the sonic point found
+    centre = 2.0 * source * sonic / sound
+    assert ions[0] == pytest.approx(centre, rel=tolerance / 2)
+    xi = model.x / sonic
+    inside = xi < 0.9
+    m = (1.0 - np.sqrt(1.0 - xi[inside] ** 2)) / xi[inside]
+    assert ions[inside] == pytest.approx(centre / (1.0 + m**2), rel=tolerance)
+    assert np.interp(sonic, model.x, ions) / ions[0] == pytest.approx(
+        0.5, rel=tolerance
+    )
+    drop = (state.potential[0] - np.interp(sonic, model.x, state.potential)) / TE
+    # the steep potential near the sonic point converges slowest: 3% at 1e15, 2% at 1e16
+    assert drop == pytest.approx(np.log(2.0), rel=0.05)
+    # every ion made leaves through the wall, with as many electrons (floating)
+    assert state.fluxes["Ar+"][-1] == pytest.approx(source * length, rel=1e-10)
+    assert state.fluxes["e"][-1] == pytest.approx(source * length, rel=1e-10)
+    # the sheath: the electrons' wall flux, half the thermal flux of the density in
+    # the wall cell (Hagelaar et al. 2000), balances the Bohm flux. With Boltzmann
+    # electrons that is T_e ln(v_e / (2 c_s)); a full Maxwellian at the sheath edge
+    # (kinetic theory) gives T_e ln(v_e / (4 c_s)), ln 2 less.
+    mean_speed = np.sqrt(8.0 * E * TE / (np.pi * ELECTRON_MASS))
+    sheath = np.interp(sonic, model.x, state.potential) / TE
+    assert sheath == pytest.approx(np.log(mean_speed / (2.0 * sound)), rel=0.05)
 
 
 def test_a_discharge_sustains_itself_and_closes_its_balances() -> None:
@@ -157,6 +268,60 @@ def test_boundaries_can_be_changed_between_steps() -> None:
         model.set_boundary("middle", "e", Boundary.wall())
 
 
+def test_volume_sources_are_sources_per_unit_density_with_their_energy() -> None:
+    """A beam-like source on a fixed gas equals the same rates given as sources and heating."""
+    cells, gas = 50, 2.0e19
+    x = (np.arange(cells) + 0.5) / cells
+    rate = 1.0e21 * np.exp(-(((x - 0.5) / 0.2) ** 2))  # m^-3 s^-1
+    energy = 30.0  # eV per event
+    plain = plasma(
+        0.05,
+        cells,
+        electron_temperature=None,
+        fixed={"Ar": gas},
+        sources={"e": rate, "Ar+": rate},
+        heating=rate * energy * 1.602176634e-19,
+    )
+    source = VolumeSource(
+        {"e": 1, "Ar+": 1, "Ar": -1},
+        rate / gas,
+        per=("Ar",),
+        electron_energy=energy,
+        name="beam",
+    )
+    beam = plasma(
+        0.05,
+        cells,
+        electron_temperature=None,
+        fixed={"Ar": gas},
+        volume_sources=[source],
+    )
+    rng = np.random.default_rng(1)
+    density = 1e15 * (1.0 + 0.1 * rng.random(cells))
+    unknowns = beam.pack(
+        {"e": density, "Ar+": density * 1.01},
+        2.0 + rng.random(cells),
+        rng.random(cells),
+    )
+    assert beam._residual(unknowns, None, np.inf) == pytest.approx(
+        plain._residual(unknowns, None, np.inf), rel=1e-12, abs=1e-300
+    )
+    state = beam.state(unknowns)
+    assert state.reaction_rates["beam"] == pytest.approx(rate)
+    terms = beam.energy_balance(state)
+    assert terms["sources"] == pytest.approx(state.integral(rate * energy))
+    assert terms["reactions"] == 0.0
+    with pytest.raises(ValueError, match="one per cell"):
+        plasma(
+            0.05,
+            cells,
+            fixed={"Ar": gas},
+            volume_sources=[VolumeSource({"e": 1}, np.ones(3), per=("Ar",))],
+        )
+    with pytest.raises(ValueError, match="1D model"):
+        source.coefficient(2.0, 0.025)
+
+
 def test_bad_models_are_refused() -> None:
     with pytest.raises(ValueError, match="electrons"):
         Fluid1D([FluidSpecies(ION, 0.1)], [], 0.01, 10)
@@ -164,5 +329,9 @@ def test_bad_models_are_refused() -> None:
         FluidSpecies(Species.atomic("Ar", 39.948))
     with pytest.raises(ValueError, match="needs mobility"):
         FluidSpecies(ION)
+    with pytest.raises(ValueError, match="for ion species"):
+        FluidSpecies(ELECTRON, 30.0, momentum=True)
+    with pytest.raises(ValueError, match="gas temperature"):
+        FluidSpecies(ION, 0.1, diffusion=1.0, momentum=True)
     with pytest.raises(ValueError, match="unknown species"):
         plasma(0.01, 10, reactions=[Reaction(("e", "Xe"), ("e",), 1.0)])

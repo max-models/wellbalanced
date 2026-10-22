@@ -25,8 +25,10 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   from one steady state to the next.
 - **1D fluid model** (`Fluid1D`): drift-diffusion of every species with
   Scharfetter-Gummel fluxes, the electron energy equation and Poisson's equation, fully
-  implicit. Walls, prescribed densities or fluxes at either end, changeable between
-  steps, as the fluid side of a coupling to a particle code.
+  implicit. Ions may carry their momentum equation instead (friction from their
+  mobility), so they reach the Bohm speed at the sheath edge; checked against the
+  closed-form collisionless presheath. Walls, prescribed densities or fluxes at either
+  end, changeable between steps, as the fluid side of a coupling to a particle code.
 - **2D axial-azimuthal drift fluid of a magnetron** (`DriftFluid2D`): magnetised electrons
   with the Hall tensor, inertial ions, neutral depletion and refill, the electron energy
   and a semi-implicit Poisson solve; the gradient-drift instability and spoke diagnostics
@@ -45,7 +47,10 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
 - **A beam-driven plasma neutralizer** (`wellbalanced.neutralizer`): a fast beam's
   charge states on the gas and on the plasma it makes, coupled to a global model of the
   channel fed by the beam's stripped and secondary electrons, iterated to a fixed point
-  in seconds.
+  in seconds. The beam's sources are functions of its local flux, energy and charge
+  states, with cross sections that may depend on the energy and secondary electrons of
+  the mean energy of their distribution (e.g. Rudd's, from plasmacoll); the same sources
+  drive a `Fluid1D` across the channel.
 - **The inductive RF field of a driver** (`InductiveField2D`, `wellbalanced.spatial`): the
   magnetoquasistatic vector potential of coil windings, perfect conductors (backplates,
   electromagnetic shields) and a prescribed plasma in a 2D Cartesian cut or in r–z, with cold

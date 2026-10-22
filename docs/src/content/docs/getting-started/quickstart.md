@@ -78,6 +78,11 @@ state = model.steady_state(model.pack({"e": guess, "Ar+": guess}, 3.0, 0.0))
 print(state.densities["e"].max(), model.energy_balance(state))
 ```
 
+`FluidSpecies(argon_ion, mobility=10.0, momentum=True)` gives the ions their momentum
+equation instead of drift-diffusion (the friction on the gas from the mobility), so they
+accelerate through a presheath to the Bohm speed and on through the sheath; with a large
+mobility the ions are collisionless.
+
 Boundaries are set per species and end, and can be changed between steps:
 `model.set_boundary("left", "e", Boundary.flux(1e16))`. Resolve the Debye length with the
 cells: with an unresolved sheath Newton's method cannot take long implicit steps.
@@ -96,6 +101,11 @@ print(result.neutral_fraction, result.plasma.ionization_degree(["D2", "D"]))
 ```
 
 Real data go into a `Neutralizer` with a `BeamData` (the beam's cross sections on the gas
-and the plasma) and the plasma's species and reactions.
+and the plasma at its energy) or a `BeamCrossSections` (the same as functions of the beam
+energy, e.g. plasmacoll `CrossSection`s, and the gas ionization as an energy distribution of
+its secondary electrons such as `plasmacoll.RuddIonization`), and the plasma's species and
+reactions. `model.beam_sources(flux, fractions, energy)` gives the beam's sources where the
+beam has that flux, those charge-state fractions and that energy: numbers for the global
+model, or arrays on the cells of a `Fluid1D` (its `volume_sources`).
 
 See the [API reference](/wellbalanced/api/wellbalanced/) for every class and function.

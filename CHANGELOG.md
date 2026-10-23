@@ -22,6 +22,25 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`wellbalanced.spatial.iterative`), about 40 iterations from 60 000 to 220 000 unknowns
   (26 s instead of 320 s for the direct solve at 62 000).
 
+- The neutralizer's gas along the channel (step 3 of the neutralizer plan): `GasProfile`, a
+  free-molecular density profile for a feed (it scales with the inflow and `1 / v_mean`),
+  from any arrays (e.g. picnic's `NeutralParticleTransport` with diffuse walls) or
+  `GasProfile.knudsen` (Knudsen diffusion from the feed to both ends, Marshak's
+  `Gamma = n v_mean / 2` at the exits). `Neutralizer(gas_profile=...)` keeps its shape and
+  balances its mean: pumping speed from the profile, the beam across its line density, the
+  sources on the gas with the fractions weighted with it. In the illustrative channel the
+  profile holds 3.5 times the gas of the end conductances for the same feed;
+  `NeutralParticleTransport` in 3D has the same peak as the Knudsen model and an 8% lower mean.
+  The neutral fraction depends on the line density alone (the same to 1e-3 for a flat and a
+  peaked profile of equal line density).
+- `Neutralizer.local_plasma`: the plasma of every axial slice in its own gas and beam (the
+  limit of no axial transport), with densities, `T_e` and plasma potential along the channel;
+  `NeutralizerResult.gas_profile`, `.line_density` and `.plasma_potential`;
+  `GlobalModel.plasma_potential` (presheath plus sheath, lowered by net negative sources).
+- Example `neutralizer_gas_profile.py`: the neutral fraction, ionization degree and plasma
+  potential against the gas flow for the uniform gas, the Knudsen profile and the profile of
+  `NeutralParticleTransport` (`examples/data/neutralizer_gas_npt.csv`); against the beam
+  current; and along the channel.
 - `Fluid2D` on refined patches (`PatchGrid` with several levels): all levels take one
   implicit step on the leaf cells, and between levels each face is as long as the finer
   cell's side, so every face carries one flux and particles and energy are conserved to

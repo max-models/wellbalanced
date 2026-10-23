@@ -31,8 +31,10 @@ Plasma, in one of two forms:
   cells), ``curl (mu curl u)``, which is the paper's ``-mu laplacian u`` for a uniform
   ``mu_e``. The electrons do not slip at the edge of the plasma (``u = 0`` on its faces),
   an assumption until the boundary conditions of the model (Zielke's thesis) are in.
-  The RF Lorentz force ``F_L = -e u_in-plane x B`` needs the in-plane electron velocity
-  of a fluid model (step R3, piece 3, ``Fluid2D``); it is zero here.
+  The RF Lorentz force in this equation, ``F_L = -e u_in-plane x B`` of the in-plane
+  electron drift, is zero here (the drift is far slower than ``u``); the in-plane force
+  the RF motion feels, ``-(e/2) Re(u x B*)``, is :attr:`InductiveSolution.lorentz_force`,
+  which :class:`~wellbalanced.spatial.fluid.Fluid2D` takes.
 
 The electron density, temperature and collision frequency are prescribed; a
 :class:`~wellbalanced.spatial.regions.PlasmaRegion` sets the density to zero outside the
@@ -191,6 +193,37 @@ class InductiveSolution:
     def magnetic_field(self) -> tuple[np.ndarray, np.ndarray]:
         """The in-plane field [T]: ``(B_x, B_y)`` in a cut, ``(B_r, B_z)`` in r–z."""
         return self.grid.curl(self.vector_potential)
+
+    @property
+    def electron_velocity_amplitude(self) -> np.ndarray:
+        """The electrons' velocity normal to the plane [m/s], zero outside the plasma.
+
+        The viscous solution's ``u``, or ``-J / (e n_e)`` for the cold plasma.
+        """
+        if self.electron_velocity is not None:
+            return self.electron_velocity
+        n = self.electron_density
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.where(
+                n > 0.0, -self.plasma_current_density / (ELEMENTARY_CHARGE * n), 0.0
+            )
+
+    @property
+    def lorentz_force(self) -> tuple[np.ndarray, np.ndarray]:
+        """The RF-averaged Lorentz force on an electron, in the plane [N].
+
+        ``-(e / 2) Re(u x B*)`` of the velocity ``u`` normal to the plane and the
+        in-plane field ``B``: ``(-(e/2) Re(u B_z*), (e/2) Re(u B_r*))`` in r–z,
+        ``((e/2) Re(u B_y*), -(e/2) Re(u B_x*))`` in a cut. The force density
+        ``n_e`` times it is the time-averaged ``J x B`` on the plasma current, which
+        flows against the coil's: it pushes the electrons away from the coil.
+        """
+        u = self.electron_velocity_amplitude
+        b_1, b_2 = self.magnetic_field
+        half = 0.5 * ELEMENTARY_CHARGE
+        if self.grid.cylindrical:
+            return -half * np.real(u * np.conj(b_2)), half * np.real(u * np.conj(b_1))
+        return half * np.real(u * np.conj(b_2)), -half * np.real(u * np.conj(b_1))
 
     @property
     def power_density(self) -> np.ndarray:
@@ -356,8 +389,9 @@ class InductiveField2D:
             ``("dirichlet", "dirichlet")``, or the grid's.
         geometry: ``"cartesian"`` (a cut, ``A_z``) or ``"cylindrical"`` (r–z,
             ``A_phi``); default ``"cartesian"``, or the grid's.
-        electron_drift: The in-plane electron velocity for the RF Lorentz force; not
-            implemented until ``Fluid2D`` provides it.
+        electron_drift: The in-plane electron velocity for the RF Lorentz force in the
+            momentum balance; not implemented (the drift of
+            :class:`~wellbalanced.spatial.fluid.Fluid2D` is far slower than ``u``).
         grid: A grid instead of the edges, e.g. a
             :class:`~wellbalanced.spatial.patches.PatchGrid` (its geometry and
             boundaries are the model's).
@@ -386,7 +420,7 @@ class InductiveField2D:
             raise ValueError("frequency must be positive")
         if electron_drift is not None:
             raise NotImplementedError(
-                "the RF Lorentz force needs the in-plane electron velocity of Fluid2D"
+                "the Lorentz force of the in-plane drift in the momentum balance"
             )
         if grid is None:
             if x_edges is None or y_edges is None:

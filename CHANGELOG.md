@@ -7,6 +7,39 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The 0D/1D consistency test of the neutralizer plasma: across the channel, with the gas
+  uniform and the beam filling the channel, a `Fluid1D` (momentum ions, electron energy,
+  resolved sheaths, the beam's `volume_sources`) averaged over the width against a
+  `GlobalModel` of the same slab with the same reactions and beam sources, its `h` taken
+  from the 1D wall flux (0.61): the electron temperature within 0.1% (test: 1%), the
+  densities within 3% (test: 5%), the remainder the presheath drop (about 0.7 T_e where the
+  global model counts T_e / 2).
+- `Fluid2D` (`wellbalanced.spatial.fluid`, step R3.3 of the RF-driver plan): the driver
+  plasma as a multi-species fluid on the cells of the field's grid, in r–z or in a cut.
+  Ion continuity and momentum (inertia, born at rest, drag on the gas from the mobility
+  or from a constant mean free path), drift-diffusion electrons with their energy (rates
+  from plasmacoll, `nu` from the momentum-transfer reactions), a quasi-neutral potential
+  with sheath walls (Bohm ions, Boltzmann-reflected electrons) or Fluid1D's Poisson
+  closure; heated by the field's `1/2 Re(J E*)` and pushed by its RF Lorentz force. Finite
+  volumes on the faces, implicit, Newton with a coloured finite-difference Jacobian; on a
+  `CellGrid` or a single-level `PatchGrid` (refined patches wait for patchwork's
+  refluxing). Checked: particles and energy over a step to round-off, a slab against
+  Fluid1D to 1e-10, ambipolar diffusion in a slab and a cylinder against their closed
+  forms (first order), the collisionless slab with uniform ionization (`n_s = n_0 / 2`),
+  patches against the tensor grid, a driver's steady state, and the coupled column
+  against the global model (with the fluid's edge-to-mean ratio: `n_e` within 6 %, the
+  coil current within 3 %). Placeholder rates and ion mobilities.
+- `fluid_plasma` and `FluidPlasma`: the field–fluid fixed point at a given absorbed power,
+  the plasma model of `DriverCoupling` (with relaxation and a ramp of the force).
+- `InductiveSolution.lorentz_force` (the RF-averaged `-(e/2) Re(u x B*)` per electron) and
+  `.electron_velocity_amplitude`; `CellGrid.transport_faces` and
+  `PatchGrid.transport_faces` (`TransportFaces`), the faces for finite-volume transport;
+  `scharfetter_gummel` shared by Fluid1D and Fluid2D.
+- Example `rf_driver_fluid2d.py`: the BUG driver in r–z as a fluid in its field at 25 kW
+  (106 A, eta 88 %), against the global model in the same field (124 A, 84 %) and with the
+  fluid's edge ratio (`n_e` within 4 %), and the size of the RF Lorentz force (about 17
+  kV/m against an ambipolar 0.7 kV/m); with the full force the fixed point does not
+  converge yet.
 - `InductiveField3D` (step R4 of the RF-driver plan): the time-harmonic
   magnetoquasistatic field in 3D, `curl (nu curl A) + i omega sigma A = J_coil`, with `A`
   on the edges of a uniform Cartesian grid (`EdgeGrid`, finite integration: the curl and
@@ -35,10 +68,12 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   its closed form, the ions reaching the Bohm speed at the sheath edge with half the central
   density and `T_e ln 2` below it: the density profile within 4% at a Debye length of
   7e-3 of the size and 1.3% at 2e-3, the potential drop within 3% and 2%.
-  `FluidState.velocity` gives the mean velocity on the faces. The sheath drop, with the
-  electrons' wall flux of Hagelaar et al. (half the thermal flux of the wall cell's
-  density), is `T_e ln(v_e / (2 c_s))`: `T_e ln 2` more than a full Maxwellian at the
-  sheath edge gives, to be checked against PIC.
+  `FluidState.velocity` gives the mean velocity on the faces.
+- `Boundary.wall(thermal_share=...)`: the share of `v_th n` a wall takes, 1/2 (Hagelaar et
+  al. 2000, the default) or 1/4 (a full Maxwellian, as kinetic sheath theory and the global
+  model assume for the Boltzmann electrons of a resolved sheath). The floating sheath of the
+  presheath test is `T_e ln(s v_e / c_s)` within 5% for both: 4.8 T_e with 1/4 against 4.67
+  from kinetic theory for Ar+, and `T_e ln 2` more with 1/2.
 - Neutralizer beam sources as functions of the local beam: `Neutralizer.beam_sources(flux,
   fractions, energy)` gives the stripping, capture and gas-ionization sources where the beam
   has that particle flux, those charge-state fractions and that energy (numbers, or arrays
@@ -84,6 +119,17 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `GlobalModel`'s floating walls when the sources add net negative charge (a beam's
+  stripped electrons): the sheath drop falls by `T_e ln(Gamma_e / Gamma_+)` and the extra
+  electrons cross the presheath and sheath too, so the electrons lose
+  `Gamma_e (5/2 T_e + V)` at the walls (they lost only `2 T_e` each beyond the ions'). Found
+  by the 0D/1D test; the illustrative neutralizer's electron density falls by 3%, its
+  neutral fraction moves by 1e-4.
+- `Fluid1D`'s Newton solver: a central-difference Jacobian, the equations' scales held fixed
+  during each solve (so a cell's residual depends on its neighbours only and the Jacobian by
+  colours is exact), and the Bernoulli function's series to `x^4` near 0 (`1 - x/2` erred
+  by `x^2/12`, noise in the residual of a fine mesh). Newton converges quadratically again
+  with an energy equation and ion momentum; the `Fluid1D` tests run in a fifth of the time.
 - `InductiveField2D`, `InductiveSolution`, `Winding`, `Conductor` moved from
   `wellbalanced.inductive` to `wellbalanced.spatial` (still exported by `wellbalanced`);
   powers are per volume element (`cell_volumes`), `depth` is optional (an r–z solution has

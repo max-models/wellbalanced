@@ -10,6 +10,8 @@ import pytest
 from plasmacoll import ChargeStateTransitions, charge_state_fractions
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
 
+from wellbalanced import ELECTRON, Chamber, GlobalModel
+from wellbalanced.fluid1d import Boundary, Fluid1D, FluidSpecies, PotentialBoundary
 from wellbalanced.neutralizer import (
     BeamCrossSections,
     BeamData,
@@ -226,3 +228,105 @@ def test_rudd_secondaries_of_deuterons_on_d2() -> None:
     assert at.gas_ionization["+"] == pytest.approx(rudd.total(1.0e6))
     # Rudd's H2 parameters at 1 MeV / 2 (the same speed as a proton at 0.5 MeV)
     assert at.secondary_energy["+"] == pytest.approx(36.8, abs=0.1)
+
+
+def test_the_1d_plasma_averaged_across_the_channel_is_the_0d_plasma() -> None:
+    """The 0D/1D consistency test, where the global model's assumptions hold.
+
+    Across the channel's width, with the gas uniform (fixed) and the beam filling the
+    channel, a ``Fluid1D`` (momentum ions, electron energy, Poisson, sheaths resolved)
+    and a ``GlobalModel`` of the same slab take the same reactions and the same beam
+    sources; the electrons leave a wall with the thermal flux of a full Maxwellian,
+    as the global model's floating sheath assumes. The one number the global model
+    takes from the profile is its edge-to-centre ratio ``h``. Then the electron
+    temperature agrees to 1% and the densities to 5%: what is left is the presheath,
+    a potential drop of about 0.7 T_e where the global model counts T_e / 2. The ion
+    mobilities are illustrative (mildly collisional presheath).
+    """
+    model = neutralizer()
+    species = {s.name: s for s in model.species}
+    gas = {"D2": 5.0e19, "D": 5.0e18}
+    z, fractions = model.fractions(model.gas_target_density(gas), 0.0)
+    mean = np.trapezoid(fractions, z, axis=0) / model.length
+    sources = model.beam_sources(model.mean_flux, mean)
+    half, tg = 0.5 * model.width, 0.03
+    elastic = 3.0e-14 * gas["D2"]  # the placeholder elastic rate, 1/s
+    ions = ("D2+", "D+")
+    slab = Fluid1D(
+        [
+            FluidSpecies(ELECTRON, ELEMENTARY_CHARGE / (ELECTRON_MASS * elastic)),
+            FluidSpecies(species["D2+"], 700.0, momentum=True),
+            FluidSpecies(species["D+"], 1000.0, momentum=True),
+        ],
+        model.reactions,
+        half,
+        450,
+        fixed=gas,
+        gas_temperature=tg,
+        volume_sources=sources,
+        boundaries={
+            "left": {name: Boundary.symmetry() for name in ("e", *ions)},
+            "right": {"e": Boundary.wall(thermal_share=0.25)},
+        },
+        potential={"left": PotentialBoundary.field(0.0)},
+    )
+
+    def global_model(h: float) -> GlobalModel:
+        return GlobalModel(
+            [species[n] for n in ("e", "D2", "D", *ions)],
+            model.reactions,
+            Chamber(model.width, 2.0, h_factor=h),  # per m^2 of the slab
+            fixed=gas,
+            sources=sources,
+            gas_temperature=tg,
+        )
+
+    # start the slab from a global model's plasma
+    start = global_model(0.5).steady_state({"Te": 3.0})
+    te = start.electron_temperature
+    x, faces = slab.x, slab.faces
+    shape = np.cos(0.5 * np.pi * 0.95 * x / half)
+    densities = {k: start.densities[k] * shape / shape.mean() for k in ("e", *ions)}
+    fluxes = {
+        k: start.densities[k]
+        * np.sqrt(ELEMENTARY_CHARGE * te / species[k].mass)
+        * 0.5
+        * np.sin(0.5 * np.pi * faces / half)
+        for k in ions
+    }
+    potential = te * np.log(shape / shape[-1]) + 5.0 * te
+    state = slab.steady_state(slab.pack(densities, te, potential, fluxes))
+    assert state.converged
+    made = state.integral(state.reaction_rates["ionization of D2"])
+    for imbalance in slab.balance(state).values():
+        assert abs(imbalance) < 1e-8 * made
+    assert abs(sum(slab.energy_balance(state).values())) < 1e-8 * made * te
+
+    averages = {k: state.integral(v) / half for k, v in state.densities.items()}
+    temperature = state.integral(state.electron_temperature * state.densities["e"])
+    temperature /= state.integral(state.densities["e"])
+    # the global model's uniform electron temperature
+    assert np.ptp(state.electron_temperature) < 1e-3 * temperature
+    # the electrons leave faster than the ions by the stripped electrons
+    stripped = sum(
+        state.integral(state.reaction_rates[s.name]) * s.changes.get("e", 0)
+        for s in sources
+        if set(s.changes) == {"e"}
+    )
+    positive = sum(state.fluxes[k][-1] for k in ions)
+    assert state.fluxes["e"][-1] - positive == pytest.approx(stripped, rel=1e-6)
+    # h from the profile: the ions' wall flux over their Bohm flux at the mean density
+    bohm = sum(
+        averages[k] * np.sqrt(ELEMENTARY_CHARGE * temperature / species[k].mass)
+        for k in ions
+    )
+    h = positive / bohm
+    assert 0.5 < h < 0.7
+    plasma = global_model(h).steady_state({"Te": temperature})
+    assert plasma.converged
+    assert plasma.electron_temperature == pytest.approx(temperature, rel=0.01)
+    for name in ("e", *ions):
+        assert plasma.densities[name] == pytest.approx(averages[name], rel=0.05)
+    assert plasma.densities["D+"] / plasma.densities["D2+"] == pytest.approx(
+        averages["D+"] / averages["D2+"], rel=0.02
+    )

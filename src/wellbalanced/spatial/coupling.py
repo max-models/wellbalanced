@@ -21,8 +21,12 @@ to a relative tolerance.
 :class:`~wellbalanced.driver.RFDriver`'s global model: its electron density, temperature
 and momentum-transfer frequency on a fixed spatial shape. With it the 0D plasma sits in
 the real 2D (or r–z) field instead of the transformer model, which the returned
-:class:`~wellbalanced.driver.DriverState` still gives for comparison. A fluid model
-(``Fluid2D``) will replace the fixed shape.
+:class:`~wellbalanced.driver.DriverState` still gives for comparison.
+
+:func:`fluid_plasma` makes the plasma model of a :class:`~wellbalanced.spatial.fluid.Fluid2D`
+instead: at a given absorbed power, the field of the fluid's plasma heats the fluid
+(``1/2 Re(J E*)``) and pushes its electrons (the RF Lorentz force), and the two are
+iterated to a fixed point, so the plasma's shape comes out of the model.
 """
 
 from __future__ import annotations
@@ -35,10 +39,18 @@ import numpy as np
 
 from wellbalanced.driver import DriverState, RFDriver
 from wellbalanced.global_model import GlobalState
+from wellbalanced.spatial.fluid import Fluid2D, Fluid2DState
 from wellbalanced.spatial.grid import CellField
 from wellbalanced.spatial.inductive import InductiveField2D, InductiveSolution
 
-__all__ = ["CoupledState", "DriverCoupling", "PlasmaProfile", "global_model_plasma"]
+__all__ = [
+    "CoupledState",
+    "DriverCoupling",
+    "FluidPlasma",
+    "PlasmaProfile",
+    "fluid_plasma",
+    "global_model_plasma",
+]
 
 
 @dataclass(frozen=True)
@@ -232,5 +244,99 @@ def global_model_plasma(
             ),
         )
         return profile, state
+
+    return plasma
+
+
+@dataclass
+class FluidPlasma:
+    """The fluid plasma at one absorbed power and the field that heats it.
+
+    Attributes:
+        state: The fluid's steady state.
+        solution: The field of that plasma, at the coil current of the power.
+        passes: The field–fluid passes made.
+        converged: Whether the passes reached the tolerance.
+        history: The largest relative change of ``n_e`` after each pass.
+    """
+
+    state: Fluid2DState
+    solution: InductiveSolution
+    passes: int
+    converged: bool
+    history: list[float] = field(default_factory=list)
+
+
+def fluid_plasma(
+    fluid: Fluid2D,
+    field: Callable[[PlasmaProfile], InductiveField2D],
+    guess: Fluid2DState | np.ndarray,
+    *,
+    lorentz: bool | float = True,
+    viscous: bool = False,
+    tolerance: float = 1.0e-3,
+    max_passes: int = 40,
+    relaxation: float = 1.0,
+    ramp: int = 1,
+) -> Callable[[float], tuple[PlasmaProfile, FluidPlasma]]:
+    """The plasma model of a :class:`Fluid2D` in its field, for :class:`DriverCoupling`.
+
+    At an absorbed power ``P``: the field of the fluid's plasma (``field(profile)``, on
+    the fluid's grid) scaled to ``P``, the fluid's steady state heated by its
+    ``1/2 Re(J E*)`` and pushed by its RF Lorentz force (scaled by ``lorentz``),
+    repeated until the largest change of ``n_e`` over the peak is below
+    ``tolerance``. ``relaxation`` mixes the new heating and force with the last; the
+    force grows linearly to its full value over the first ``ramp`` passes (a strong
+    force moves the plasma off the coil, a step better taken gradually). ``viscous``
+    gives the field the fluid's ``T_e`` (viscous electrons). Each call continues from
+    the last state, starting from ``guess``. Returns ``(profile, FluidPlasma)``.
+    """
+    if not 0.0 < relaxation <= 1.0:
+        raise ValueError("relaxation must be in (0, 1]")
+    if ramp < 1:
+        raise ValueError("ramp must be at least one pass")
+    start = guess if isinstance(guess, Fluid2DState) else fluid.state(guess)
+    last: list[Fluid2DState] = [start]
+    calls = [0]
+
+    def plasma(power: float) -> tuple[PlasmaProfile, FluidPlasma]:
+        state = last[0]
+        history: list[float] = []
+        converged = False
+        heating = force = None
+        solution = None
+        passes = 0
+        for passes in range(1, max_passes + 1):  # noqa: B007
+            profile = fluid.plasma_profile(state, viscous=viscous)
+            solution = field(profile).solve(1.0).for_power(power)
+            share = min(1.0, passes / ramp) if calls[0] == 0 else 1.0
+            fluid.set_field(solution, lorentz=float(lorentz) * share)
+            if heating is not None and force is not None and relaxation < 1.0:
+                a = relaxation
+                fluid.heating = a * fluid.heating + (1 - a) * heating
+                fluid.electron_force = (
+                    a * fluid.electron_force[0] + (1 - a) * force[0],
+                    a * fluid.electron_force[1] + (1 - a) * force[1],
+                )
+            heating, force = fluid.heating, fluid.electron_force
+            new = fluid.steady_state(state.unknowns, dt=1.0e-7)
+            if not new.converged:
+                new = fluid.steady_state(state.unknowns)
+            if not new.converged:
+                break  # the fluid found no steady state: stop with the last one
+            change = float(
+                np.max(np.abs(new.electron_density - state.electron_density))
+                / np.max(new.electron_density)
+            )
+            history.append(change)
+            state = new
+            if change < tolerance and share == 1.0:
+                converged = True
+                break
+        last[0] = state
+        calls[0] += 1
+        assert solution is not None
+        result = FluidPlasma(state, solution, passes, converged, history)
+        return fluid.plasma_profile(state, viscous=viscous), result
 
     return plasma

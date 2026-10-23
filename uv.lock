@@ -2742,8 +2742,8 @@ wheels = [
 
 [[package]]
 name = "patchwork-amr"
-version = "0.1.0"
-source = { git = "https://github.com/max-models/patchwork?branch=devel#24596e2524b2ec0323cf6aa5f3d95b9ff0590e47" }
+version = "0.2.0"
+source = { git = "https://github.com/max-models/patchwork?branch=devel#722bd246ee8bcae1c2d6cff9a7e9ae1dd8b42bfb" }
 dependencies = [
     { name = "maybempi" },
     { name = "mpiarray" },

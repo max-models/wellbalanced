@@ -181,7 +181,9 @@ from Knudsen diffusion or from a kinetic run (picnic's `NeutralParticleTransport
 from plasmacoll.constants import ATOMIC_MASS
 from wellbalanced.neutralizer import GasProfile
 
-gas = GasProfile.knudsen(3.0, 0.1, 1.7, 4.028 * ATOMIC_MASS, inflow=2e21, temperature=0.03)
+gas = GasProfile.knudsen(
+    3.0, 0.1, 1.7, 4.028 * ATOMIC_MASS, inflow=2e21, temperature=0.03
+)
 result = illustrative_deuterium_neutralizer(gas_profile=gas).solve()
 print(result.line_density, result.neutral_fraction, result.plasma_potential)
 ```

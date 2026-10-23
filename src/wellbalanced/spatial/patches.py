@@ -398,17 +398,16 @@ class PatchGrid:
         return result & inside
 
     def transport_faces(self) -> TransportFaces:
-        """The faces of the leaf cells for finite-volume transport, on one level only.
+        """The faces of the leaf cells for finite-volume transport, across levels too.
 
-        Conservative transport across coarse–fine faces, stepped in time level by level,
-        needs patchwork's refluxing (``patchwork_plan.md``, 4c), not merged yet: until
-        then a hierarchy with refined levels raises ``NotImplementedError``.
+        Between two leaf cells of different levels each face is as long as the finer
+        cell's side (patchwork's :meth:`~patchwork.CompositeCells.faces`): one flux
+        per face, which the coarse cell sums over its faces on that side, is what
+        patchwork's refluxing (:class:`~patchwork.FluxRegister`) restores after an
+        explicit step; a scheme that takes these faces has it from the start. Their
+        ``coarse_side``, ``coarse_neighbours`` and ``coarse_offset`` (see
+        :class:`TransportFaces`) locate the coarse value along the face.
         """
-        if self.num_levels > 1:
-            raise NotImplementedError(
-                "transport on refined patches needs patchwork's refluxing (its plan, "
-                "4c); use a single-level PatchGrid or a CellGrid"
-            )
         cells = self.cells
         centres = np.stack([self.x, self.y], axis=1)
         (x0, x1), (y0, y1) = self.hierarchy.bounds
@@ -427,7 +426,15 @@ class PatchGrid:
                 delta_high < 0.0, delta_high + length[axis], delta_high
             )
             interior.append(
-                (low, high, np.full(low.shape, axis), area, delta_low, delta_high)
+                (
+                    low,
+                    high,
+                    np.full(low.shape, axis),
+                    area,
+                    delta_low,
+                    delta_high,
+                    *self._coarse_fine(axis, low, high, faces["start"], faces["count"]),
+                )
             )
             if self.boundaries[axis] == "periodic":
                 continue
@@ -447,6 +454,52 @@ class PatchGrid:
                 )
             )
         return TransportFaces.concatenate(interior, boundary)
+
+    def _coarse_fine(
+        self,
+        axis: int,
+        low: np.ndarray,
+        high: np.ndarray,
+        start: np.ndarray,
+        count: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The coarser cell of faces between levels, its neighbours and the offset.
+
+        As :class:`TransportFaces` has them: ``coarse_side``, ``coarse_neighbours``
+        (the leaf cells of the coarser one's size next to it along the face, on the
+        finest lattice; periodic axes wrap) and ``coarse_offset``.
+        """
+        cells = self.cells
+        span_low, span_high = cells.span[low], cells.span[high]
+        side = np.where(
+            span_low > span_high, 0, np.where(span_high > span_low, 1, -1)
+        ).astype(int)
+        neighbours = np.full((low.size, 2), -1, dtype=int)
+        offset = np.zeros(low.size)
+        mixed = np.flatnonzero(side >= 0)
+        if not mixed.size:
+            return side, neighbours, offset
+        coarse = np.where(side[mixed] == 0, low[mixed], high[mixed])
+        other = 1 - axis
+        span = cells.span[coarse]
+        lattice = cells.lattice[coarse]
+        middle = start[mixed] + 0.5 * count[mixed]
+        offset[mixed] = (middle - (lattice[:, other] + 0.5 * span)) / span
+        size = cells.owner.shape[other]
+        for column, sign in enumerate((-1, 1)):
+            spot = lattice.copy()
+            spot[:, other] += sign * span
+            if self.hierarchy.periodic[other]:
+                spot[:, other] %= size
+            inside = (spot[:, other] >= 0) & (spot[:, other] < size)
+            found = np.full(coarse.size, -1, dtype=int)
+            found[inside] = cells.owner[tuple(spot[inside].T)]
+            valid = found >= 0
+            valid[valid] &= (cells.span[found[valid]] == span[valid]) & np.all(
+                cells.lattice[found[valid]] == spot[valid], axis=1
+            )
+            neighbours[mixed, column] = np.where(valid, found, -1)
+        return side, neighbours, offset
 
     def locate(self, x: float, y: float) -> int:
         """The leaf cell containing the point ``(x, y)`` (-1 outside the domain)."""

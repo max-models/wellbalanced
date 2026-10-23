@@ -55,10 +55,9 @@ are in Zielke's thesis, not yet read (the plan's R0); the ones here are the text
 ones above.
 
 Grid: the plasma's cells of a :class:`~wellbalanced.spatial.CellGrid` (tensor, uniform or
-stretched; r–z or the cut) or of a single-level
-:class:`~wellbalanced.spatial.PatchGrid`; their faces from ``grid.transport_faces()``.
-Conservative transport on refined patches needs patchwork's refluxing (its plan, 4c),
-not merged yet, so a multi-level patch grid is refused. The plasma is the
+stretched; r–z or the cut) or the leaf cells of a
+:class:`~wellbalanced.spatial.PatchGrid`, refined or not; their faces from
+``grid.transport_faces()``. The plasma is the
 :class:`~wellbalanced.spatial.PlasmaRegion` (or every cell): a face to a cell outside it is
 a wall; so is the domain's edge, except a ``"neumann"`` edge (a symmetry plane), a
 periodic seam and the axis of an r–z domain.
@@ -77,6 +76,24 @@ and of ``w``, the Jacobian by finite differences on a distance-2 colouring of th
 :meth:`Fluid2D.steady_state` steps in pseudo-time with a growing step, then solves the
 steady equations.
 
+On refined patches all levels take one common step: the equations are implicit, so no
+level's step is limited by its cells (the reason to subcycle an explicit scheme), and
+the quasi-neutral potential couples every cell at every instant (the conservation of
+charge is elliptic), which subcycled levels would only meet at their synchronisation.
+The unknowns are those of the leaf cells, and between levels each face is as long as
+the finer cell's side (a coarse cell has one face per finer neighbour): every face
+carries one flux, which its two cells take with opposite signs, so the totals are
+conserved to round-off across levels as on one. This is the state patchwork's
+refluxing (:class:`patchwork.FluxRegister`, Berger and Colella 1989) restores after
+an explicit step, in which the coarse cell first takes its own coarse flux; here it
+takes the fine ones from the start (the tests check the two against each other). On a
+face between levels the coarse value is interpolated along the face to its middle, on
+the line through the finer centre (quadratic through the coarse cell and its two
+neighbours of its size, as patchwork's :class:`~patchwork.CellOperator` does): the
+ghost value of the finer cell, so the face's difference is consistent. Densities,
+``w``, temperatures and mobilities are interpolated in their logarithms (they stay
+positive), the potential and the ion velocities linearly.
+
 Coupled to the field through :func:`~wellbalanced.spatial.coupling.fluid_plasma`: the field
 of the fluid's plasma, the fluid heated by that field, repeated to a fixed point at a
 given absorbed power, which :class:`~wellbalanced.spatial.DriverCoupling` turns into the
@@ -87,7 +104,11 @@ round-off over time steps; a slab against :class:`~wellbalanced.Fluid1D` to roun
 ambipolar diffusion in a slab and in an infinite cylinder against their closed forms
 (first order); the collisionless slab with uniform ionization against its closed form
 (``n_s = n_0 / 2``); a single-level patch grid against the tensor grid; the steady state
-of a driver and its balances against the global model.
+of a driver and its balances against the global model. On refined patches
+(``tests/unit/test_fluid2d_patches.py``): particles and energy over a step on three
+levels to round-off, the faces between levels cancelling exactly, patchwork's refluxed
+explicit update with these fluxes; a smooth blob converging with the uniform grid as
+fine as the patches, and a narrow one that two levels resolve and the base cannot.
 """
 
 from __future__ import annotations
@@ -242,7 +263,7 @@ class Fluid2D:
     """The plasma on the cells of a grid; see the module docstring.
 
     Args:
-        grid: A :class:`CellGrid` or a single-level :class:`PatchGrid` (the field's).
+        grid: A :class:`CellGrid` or a :class:`PatchGrid` (the field's).
         species: The fluid species, the electrons (``"e"``) included; a species'
             ``mobility`` sets an ion's friction on the gas, ``e / (M mu)``, and
             ``diffusion`` overrides the Einstein relation of the drift-diffusion
@@ -442,6 +463,7 @@ class Fluid2D:
                 faces.boundary_delta[edge_wall],
             ]
         )
+        self._coarse_fine = self._coarse_fine_stencils(faces, inner, index)
         spacing = np.concatenate([self._distance, 2.0 * self._wall_delta])
         self._length_scale = float(np.min(spacing)) if spacing.size else 1.0
         n = self.size
@@ -453,6 +475,74 @@ class Fluid2D:
             self._gradient_weight.append(
                 np.where(total > 0.0, 1.0 / np.where(total > 0, total, 1.0), 0.0)
             )
+
+    def _coarse_fine_stencils(self, faces, inner: np.ndarray, index: np.ndarray):
+        """The coarse values on the faces between levels: their cells and weights.
+
+        Across a face between leaf cells of two levels the coarse value is taken at the
+        face's middle along it (on the line through the finer centre, so the two values
+        of the face are a distance ``delta_low + delta_high`` apart along its normal):
+        quadratic through the coarse cell and its two plasma neighbours of its size
+        along the face, linear where one is missing, the coarse value where both are
+        (patchwork's :class:`~patchwork.CellOperator` interpolates alike). ``None`` on
+        one level; else the faces (among the interior ones), whether their ``low`` cell
+        is the coarse one, and the cells and weights, ``(m, 3)`` each.
+        """
+        if faces.coarse_side is None:
+            return None
+        side = faces.coarse_side[inner]
+        chosen = np.flatnonzero(side >= 0)
+        if not chosen.size:
+            return None
+        low_coarse = side[chosen] == 0
+        coarse = np.where(low_coarse, self._low[chosen], self._high[chosen])
+        delta = faces.coarse_offset[inner][chosen]
+        on_grid = faces.coarse_neighbours[inner][chosen]
+        neighbours = np.where(on_grid >= 0, index[np.maximum(on_grid, 0)], -1)
+        has_below, has_above = neighbours[:, 0] >= 0, neighbours[:, 1] >= 0
+        both = has_below & has_above
+        only_below = has_below & ~has_above
+        only_above = has_above & ~has_below
+        weights = np.zeros((chosen.size, 3))
+        weights[:, 0] = 1.0
+        weights[both, 0] = 1.0 - delta[both] ** 2
+        weights[both, 1] = 0.5 * delta[both] * (delta[both] - 1.0)
+        weights[both, 2] = 0.5 * delta[both] * (delta[both] + 1.0)
+        weights[only_below, 0] = 1.0 + delta[only_below]
+        weights[only_below, 1] = -delta[only_below]
+        weights[only_above, 0] = 1.0 - delta[only_above]
+        weights[only_above, 2] = delta[only_above]
+        cells = np.stack(
+            [
+                coarse,
+                np.where(has_below, neighbours[:, 0], coarse),
+                np.where(has_above, neighbours[:, 1], coarse),
+            ],
+            axis=1,
+        )
+        return chosen, low_coarse, cells, weights
+
+    def _sides(
+        self, values: np.ndarray, positive: bool = False
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """The values of a cell field on the two sides of every interior face.
+
+        The cells' own values, except the coarse side of a face between levels, which
+        is interpolated along the face (:meth:`_coarse_fine_stencils`); a ``positive``
+        field (a density, a temperature, a mobility) in its logarithm, so it stays
+        positive.
+        """
+        low, high = values[self._low], values[self._high]
+        if self._coarse_fine is None:
+            return low, high
+        faces, low_coarse, cells, weights = self._coarse_fine
+        if positive:
+            value = np.exp(np.sum(weights * np.log(values[cells]), axis=1))
+        else:
+            value = np.sum(weights * values[cells], axis=1)
+        low[faces[low_coarse]] = value[low_coarse]
+        high[faces[~low_coarse]] = value[~low_coarse]
+        return low, high
 
     def _on_cells(self, value: CellField) -> np.ndarray:
         """A cell field (or an array over the plasma cells) on the plasma cells."""
@@ -471,12 +561,22 @@ class Fluid2D:
     def _colouring(self) -> np.ndarray:
         """A colouring of the cells in which no two of one colour share a neighbour.
 
-        A cell's residual depends on its neighbours across faces, so perturbing all
-        cells of one colour at once gives separate columns of the Jacobian.
+        A cell's residual depends on its neighbours across faces (and, across a face
+        between levels, on the cells the coarse value is interpolated from), so
+        perturbing all cells of one colour at once gives separate columns of the
+        Jacobian.
         """
         n = self.size
-        ones = np.ones(self._low.size)
-        adjacency = sp.coo_matrix((ones, (self._low, self._high)), shape=(n, n))
+        rows, cols = [self._low], [self._high]
+        if self._coarse_fine is not None:
+            # a face between levels couples its cells to the interpolation's cells
+            faces, _, cells, _ = self._coarse_fine
+            for k in range(cells.shape[1]):
+                rows += [self._low[faces], self._high[faces]]
+                cols += [cells[:, k], cells[:, k]]
+        rows_all, cols_all = np.concatenate(rows), np.concatenate(cols)
+        ones = np.ones(rows_all.size)
+        adjacency = sp.coo_matrix((ones, (rows_all, cols_all)), shape=(n, n))
         adjacency = (adjacency + adjacency.T + sp.identity(n)).tocsr()
         adjacency.data[:] = 1.0
         square = (adjacency @ adjacency).tocsr()
@@ -604,7 +704,8 @@ class Fluid2D:
     def _gradient(self, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """The gradient on the cells: the area-weighted mean of their interior faces'."""
         low, high, n = self._low, self._high, self.size
-        face = (values[high] - values[low]) / self._distance * self._area
+        below, above = self._sides(values)
+        face = (above - below) / self._distance * self._area
         result = []
         for axis in (0, 1):
             along = np.where(self._axis == axis, face, 0.0)
@@ -622,9 +723,10 @@ class Fluid2D:
         (walls); and the ions' momentum fluxes by species, ``(interior, walls)`` per
         component.
         """
-        low, high, distance = self._low, self._high, self._distance
+        distance = self._distance
         wc = self._wall_cell
-        efield = -(phi[high] - phi[low]) / distance
+        phi_low, phi_high = self._sides(phi)
+        efield = -(phi_high - phi_low) / distance
         sheath = phi[wc] - self.wall_potential  # the drop to the wall
         e_out = sheath / self._wall_delta
         force = self._face_force()
@@ -641,17 +743,17 @@ class Fluid2D:
                 continue
             mu_cell = self._mobility(fluid, densities, te)
             t_cell = self._temperature(fluid, te)
-            mu = 0.5 * (mu_cell[low] + mu_cell[high])
+            mu = 0.5 * np.add(*self._sides(mu_cell, positive=True))
             if fluid.diffusion is not None:
-                d = np.full(low.size, fluid.diffusion)
+                d = np.full(distance.size, fluid.diffusion)
             else:
-                d = mu * 0.5 * (t_cell[low] + t_cell[high])
+                d = mu * 0.5 * np.add(*self._sides(t_cell, positive=True))
             field, field_out = efield, e_out
             if name == "e":  # the force acts as the field -F/e on the electrons
                 field = efield - force[0] / E
                 field_out = e_out - force[1] / E
             interior[name] = scharfetter_gummel(
-                z, mu, d, field, n[low], n[high], distance
+                z, mu, d, field, *self._sides(n, positive=True), distance
             )
             walls[name] = self._wall_flux(
                 fluid, n[wc], t_cell[wc], mu_cell[wc], field_out, sheath, te[wc]
@@ -659,7 +761,12 @@ class Fluid2D:
             if name == "e" and self._energy:
                 w = 1.5 * n * te
                 interior["energy"] = scharfetter_gummel(
-                    z, 5 / 3 * mu, 5 / 3 * d, field, w[low], w[high], distance
+                    z,
+                    5 / 3 * mu,
+                    5 / 3 * d,
+                    field,
+                    *self._sides(w, positive=True),
+                    distance,
                 )
                 walls["energy"] = self._wall_flux(
                     fluid,
@@ -676,13 +783,15 @@ class Fluid2D:
 
     def _ion_fluxes(self, fluid: FluidSpecies, n, velocity, te):
         """Rusanov fluxes of an ion's mass and momentum, and its Bohm outflow."""
-        low, high, axis = self._low, self._high, self._axis
+        axis = self._axis
         z, mass = fluid.species.charge, fluid.species.mass
-        nl, nh = n[low], n[high]
-        vl, vh = [c[low] for c in velocity], [c[high] for c in velocity]
+        nl, nh = self._sides(n, positive=True)
+        sides = [self._sides(c) for c in velocity]
+        vl, vh = [c[0] for c in sides], [c[1] for c in sides]
         v_low = np.where(axis == 0, vl[0], vl[1])
         v_high = np.where(axis == 0, vh[0], vh[1])
-        sound = E * (z * 0.5 * (te[low] + te[high]) + self.gas_temperature) / mass
+        te_mean = 0.5 * np.add(*self._sides(te, positive=True))
+        sound = E * (z * te_mean + self.gas_temperature) / mass
         speed = np.sqrt(v_low**2 + v_high**2 + sound)
         flux = 0.5 * (nl * v_low + nh * v_high) - 0.5 * speed * (nh - nl)
         inner = [
@@ -736,11 +845,10 @@ class Fluid2D:
     def _face_force(self) -> tuple[np.ndarray, np.ndarray]:
         """The electron force along the interior faces' axes and out through the walls."""
         components = self.electron_force
-        low, high = self._low, self._high
         along = np.where(
             self._axis == 0,
-            0.5 * (components[0][low] + components[0][high]),
-            0.5 * (components[1][low] + components[1][high]),
+            0.5 * np.add(*self._sides(components[0])),
+            0.5 * np.add(*self._sides(components[1])),
         )
         wc = self._wall_cell
         out = self._wall_sign * np.where(

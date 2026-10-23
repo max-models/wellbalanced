@@ -149,8 +149,10 @@ print(state.coil_current, state.efficiency, fluid.energy_balance(state.plasma.st
 `lorentz=True` (the default) adds the RF Lorentz force, which pushes the electrons away
 from the coil; `ramp` and `relaxation` take a strong force in gradually. At tens of kW in
 a driver the force exceeds the plasma pressure at the edge, and the fixed point with it
-does not converge yet. Conservative transport on refined patches waits for patchwork's
-refluxing: `Fluid2D` runs on a tensor `CellGrid` or a single-level `PatchGrid`. The full example is
+does not converge yet. `Fluid2D` runs on a tensor `CellGrid` or on a `PatchGrid`, refined
+or not: all levels take one implicit step, every leaf face carries one flux (the state
+patchwork's refluxing restores), and particles and energy are conserved to round-off across
+levels. The full example is
 [the BUG driver in r–z](/wellbalanced/full-examples/rf-driver-fluid2d/).
 
 ## A neutralizer

@@ -15,8 +15,8 @@ split of wellbalanced moves as a whole (the magnetron's
 :class:`~wellbalanced.DriftFluid2D` is a candidate to join it then).
 
 Shapes are anything with ``contains_points`` (simgeometry shapes, an optional
-dependency: ``pip install "wellbalanced[spatial]"``); this subpackage does not import
-simgeometry. patchwork, for :class:`~wellbalanced.spatial.patches.PatchGrid`, is in the
+dependency: ``pip install "wellbalanced[spatial]"``); simgeometry is imported only for the
+cut cells of surface-impedance conductors (:mod:`~wellbalanced.spatial.cutcell`). patchwork, for :class:`~wellbalanced.spatial.patches.PatchGrid`, is in the
 same extra and imported when a patch grid is made.
 """
 
@@ -42,6 +42,7 @@ from wellbalanced.spatial.inductive import (
 from wellbalanced.spatial.inductive3d import (
     Coil3D,
     Conductor3D,
+    ImpedanceConductor3D,
     InductiveField3D,
     InductiveSolution3D,
 )
@@ -56,6 +57,7 @@ __all__ = [
     "CoupledState",
     "DriverCoupling",
     "EdgeGrid",
+    "ImpedanceConductor3D",
     "Fluid2D",
     "Fluid2DState",
     "FluidPlasma",

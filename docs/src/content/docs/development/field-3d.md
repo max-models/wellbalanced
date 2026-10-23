@@ -140,6 +140,80 @@ Copper at 1 MHz has a skin depth of 66 µm. With δ = 0.71 mm (500 kHz) the loss
 is −78 %, −56 % and −24 %. A volume-resolved metal needs `h ≲ δ / 2`, so the shield of a
 real driver needs a surface impedance whatever the grid.
 
+## Cut cells with a surface impedance
+
+The second round of R4 adds the two things the recommendation below asked for in the
+conductors: **cut-cell (conformal) geometry** and a **surface impedance**, and an
+iterative solver. The numbers come from `benchmarks/field3d_r4_cutcell.py` and
+`benchmarks/slotted_cylinder_ngsolve_sibc.py`.
+
+**The model.** An `ImpedanceConductor3D` drops out of the field: the edges entirely
+inside it are not unknowns, and on its surface Leontovich's condition
+`E_t = Z_s H x n` holds, `Z_s = (1 + i) / (sigma delta)`. This is right where the skin
+depth is small against the wall and its radii of curvature: copper at MHz, the Faraday
+shield, the coil.
+
+**The discretisation** (Dey and Mittra's conformal faces, here in the frequency
+domain). A cut face's flux `b_f` is the line integral of `A` around its part outside
+the metal: the unknown edges' parts outside plus the stretch along the surface, where
+`A_t = (i / omega) Z_s H x n`. With `H` tangent to a good conductor that stretch is
+`(i Z_s / omega) H_f w_f`, `w_f` the surface's width in the face (its trace divided by
+the sine between the surface and the face's normal). So
+`H_f = b_f / (mu0 A_f^air - i Z_s w_f / omega)`: only the face reluctances change, the
+curl stays the incidence matrix. The losses are `1/2 Re(Z_s) |H_f|^2 w_f L*_f`, equal to
+the coil's power to round-off. The geometry comes from simgeometry's new
+`yee_fractions` (simgeometry#26): the edge-length and face-area fractions and the traces,
+exact for planes, second order for curved surfaces, slits narrower than a cell kept,
+walls on grid lines treated like a staircase. `cut_cells=False` staircases the same
+model (the metal is the cells whose centre is inside), for comparison.
+
+**Closed forms (tests).** In a z-invariant solenoid `H_z` is uniform in each connected
+region of air, which gives the loss of any conductor from its perimeter and area. A
+tilted plane wall: exact (to `1e-5`, the gauge). The tube without slits: −0.009 %,
+−0.004 %, −0.002 % and −0.001 % at h = 2.5, 1.67, 1.25 and 0.625 mm (second order);
+staircased +22 % to +28 % on every grid. A staircase is `4 / pi` too long for a circle,
+and the loss is proportional to the surface: it never converges.
+
+### The infinite tube (z-periodic quarter)
+
+Relative error of the loss against NGSolve with the same surface impedance (order 4 on
+curved meshes; three meshes agree to `1e-7`). Skin depths 2.25, 0.71 and 0.225 mm in the
+6 mm wall; the slits 4 mm.
+
+| variant | 5 mm | 2.5 mm | 1.67 mm | 1.25 mm | 0.625 mm |
+| --- | --- | --- | --- | --- | --- |
+| none, cut cells (all three frequencies) | +10.6 to +12.8 % | −0.009 % | −0.004 % | −0.002 % | −0.001 % |
+| none, staircase | +23 to +24 % | +22 to +23 % | +28 to +30 % | +27 to +28 % | +26 to +28 % |
+| through slits, 50 kHz, cut cells | −0.51 % | −0.07 % | +0.22 % | −0.06 % | −0.06 % |
+| through slits, 500 kHz, cut cells | −0.53 % | −0.07 % | +0.24 % | −0.07 % | −0.07 % |
+| through slits, 5 MHz, cut cells | −0.54 % | −0.07 % | +0.24 % | −0.07 % | −0.07 % |
+| through slits, staircase | +8 to +9 % | +19 to +21 % | +27 to +30 % | +23 to +25 % | +23 to +25 % |
+| 500 kHz, volume conductor (staircased, `field3d_r4.py`) | −83 / −85 % | −66 / −67 % | −50 / −53 % | −37 / −39 % | −12 / −15 % |
+
+- At h = 5 mm (a cell close to the wall, 6 mm) an edge can reach through the wall and
+  couple the bore to the outside: +11 % without slits. From h = t/2.4 on the cut cells
+  are within 0.25 %.
+- With slits the cut cells settle at −0.07 % of NGSolve, independent of the frequency;
+  the remainder is at the slit's corners, where both the field and the trace have
+  corners. The inductance is within 0.01 % from h = 2.5 mm.
+- A volume conductor at 500 kHz is 12–15 % low even at h = 0.625 mm (δ/h = 1.1).
+
+**The surface impedance's own error** (against NGSolve's volume conductor, boundary-layer
+meshes resolving the skin, two meshes agree to `2e-6`):
+
+| | 50 kHz (δ/t = 0.38) | 500 kHz (0.12) | 5 MHz (0.04) |
+| --- | --- | --- | --- |
+| no slits | +3.7 % | +1.0 % | +0.31 % |
+| through slits | +9.2 % | +3.5 % | +1.0 % |
+
+It falls as `δ`: the curvature (`δ / 2R`) without slits, and the slits' corners with
+them. At 5 kHz (δ = 7.1 mm, more than the wall) the surface impedance does not apply:
+the original 5 kHz and 50 kHz tests of the first round stay volume problems.
+
+### The finite tube in 3D (one eighth)
+
+(in progress)
+
 ## What it costs
 
 - **Yee grid:** the direct solve takes 40–60 s for 65 000 unknowns (24 × 24 × 40 cells)

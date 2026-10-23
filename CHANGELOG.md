@@ -7,6 +7,21 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `ImpedanceConductor3D`: good conductors of the 3D field (`InductiveField3D`) as
+  surface-impedance (Leontovich) boundaries on cut cells, step R4 of the RF-driver plan.
+  Dey and Mittra's conformal faces with `E_t = Z_s H x n` on the surface's part of their
+  contour, the geometry from simgeometry's `yee_fractions` (`wellbalanced.spatial.cutcell`;
+  `cut_cells=False` staircases it for comparison). Exact for a plane wall, second order for
+  the tube (its loss to 1e-5 at 48 cells across 60 mm); the staircase's surface is too long
+  and its loss 22–29 % high on every grid. The slotted cylinder redone with it against
+  NGSolve with the same surface impedance (`benchmarks/field3d_r4_cutcell.py`,
+  `benchmarks/slotted_cylinder_ngsolve_sibc.py`): see the development page "3D field
+  discretisation".
+- `InductiveField3D.solve(solver="iterative")`: COCG with Hiptmair and Xu's auxiliary-space
+  preconditioner and a geometric multigrid on the grid's nodes
+  (`wellbalanced.spatial.iterative`), about 40 iterations from 60 000 to 220 000 unknowns
+  (26 s instead of 320 s for the direct solve at 62 000).
+
 - The 0D/1D consistency test of the neutralizer plasma: across the channel, with the gas
   uniform and the beam filling the channel, a `Fluid1D` (momentum ions, electron energy,
   resolved sheaths, the beam's `volume_sources`) averaged over the width against a

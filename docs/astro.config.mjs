@@ -36,6 +36,7 @@ export default defineDocs({
 			items: [
 				{ label: 'Building the docs', slug: 'development/docs' },
 				{ label: 'Publishing', slug: 'development/publishing' },
+				{ label: '3D field discretisation', slug: 'development/field-3d' },
 			],
 		},
 	],

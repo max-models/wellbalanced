@@ -40,6 +40,24 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   fluid's edge ratio (`n_e` within 4 %), and the size of the RF Lorentz force (about 17
   kV/m against an ambipolar 0.7 kV/m); with the full force the fixed point does not
   converge yet.
+- `InductiveField3D` (step R4 of the RF-driver plan): the time-harmonic
+  magnetoquasistatic field in 3D, `curl (nu curl A) + i omega sigma A = J_coil`, with `A`
+  on the edges of a uniform Cartesian grid (`EdgeGrid`, finite integration: the curl and
+  gradient as incidence matrices, `C G = 0` exactly). Coils as `J = curl T`
+  (`Coil3D`, divergence-free on the grid by construction: solenoids, rectangular loops);
+  conductors staircased from simgeometry shapes and Booleans (`Conductor3D`, an edge
+  conducts if its midpoint is inside, or a sub-cell series/parallel average with
+  `samples`), and a background conductivity (a cold plasma's); Dirichlet (`A x n = 0`),
+  natural (`H x n = 0`, symmetry planes) and periodic boundaries; the gauge a small real
+  regularisation (`O(eps)` in the curl, no loss); one SuperLU per frequency in a geometric
+  nested-dissection order. The loss per conductor, the coil's impedance and `B`. Checked
+  against a long solenoid in a box (exact for the staircased cross-section), the
+  z-invariant `InductiveField2D` (to `1e-7`), symmetry planes, the gauge's `eps` and the
+  Bessel solution of a tube in a solenoid (first-order convergence of the staircase).
+- `benchmarks/`: the R4 evidence (`field3d_r4.py`), a finite solenoid against Nagaoka, a
+  long loop against the z-invariant field and a slotted cylinder against NGSolve
+  (`slotted_cylinder_ngsolve.py`, run in a separate environment; NGSolve is a benchmark,
+  not a dependency); the docs page "3D field discretisation" with the recommendation.
 
 - The ion momentum equation in `Fluid1D` (`FluidSpecies(..., momentum=True)`): the velocity
   on the faces between cells as an unknown, the electric and pressure force as the

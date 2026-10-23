@@ -7,6 +7,13 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- The 0D/1D consistency test of the neutralizer plasma: across the channel, with the gas
+  uniform and the beam filling the channel, a `Fluid1D` (momentum ions, electron energy,
+  resolved sheaths, the beam's `volume_sources`) averaged over the width against a
+  `GlobalModel` of the same slab with the same reactions and beam sources, its `h` taken
+  from the 1D wall flux (0.61): the electron temperature within 0.1% (test: 1%), the
+  densities within 3% (test: 5%), the remainder the presheath drop (about 0.7 T_e where the
+  global model counts T_e / 2).
 - `Fluid2D` (`wellbalanced.spatial.fluid`, step R3.3 of the RF-driver plan): the driver
   plasma as a multi-species fluid on the cells of the field's grid, in r–z or in a cut.
   Ion continuity and momentum (inertia, born at rest, drag on the gas from the mobility
@@ -94,6 +101,12 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `GlobalModel`'s floating walls when the sources add net negative charge (a beam's
+  stripped electrons): the sheath drop falls by `T_e ln(Gamma_e / Gamma_+)` and the extra
+  electrons cross the presheath and sheath too, so the electrons lose
+  `Gamma_e (5/2 T_e + V)` at the walls (they lost only `2 T_e` each beyond the ions'). Found
+  by the 0D/1D test; the illustrative neutralizer's electron density falls by 3%, its
+  neutral fraction moves by 1e-4.
 - `Fluid1D`'s Newton solver: a central-difference Jacobian, the equations' scales held fixed
   during each solve (so a cell's residual depends on its neighbours only and the Jacobian by
   colours is exact), and the Bernoulli function's series to `x^4` near 0 (`1 - x/2` erred

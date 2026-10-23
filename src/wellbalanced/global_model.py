@@ -19,7 +19,11 @@ area of magnetic cusps, ``L w`` with the hybrid leak width
 the sheath and do not reach the walls. Floating walls draw as many electrons
 as ions (plus any net negative charge the sources add); every electron lost
 takes ``2 T_e`` and every ion ``T_e / 2 + V_f`` with the floating potential
-``V_f = T_e ln sqrt(M / (2 pi m_e))``. Neutral species are lost at the walls
+``V_f = T_e ln sqrt(M / (2 pi m_e))``. When the sources add net negative
+charge (the stripped electrons of a beam), ``Gamma_e`` electrons leave for
+``Gamma_+`` ions: the sheath drop is ``V_f - T_e ln(Gamma_e / Gamma_+)``, and
+the extra electrons lose ``T_e / 2`` and that drop as well, so the electrons
+lose ``Gamma_e (5 T_e / 2 + V)`` at the walls in all. Neutral species are lost at the walls
 with a probability (recombination, quenching) at a quarter of their mean speed
 and returned as products.
 
@@ -444,7 +448,8 @@ class GlobalModel:
                 power[source.name] = source.electron_energy * rate * E * volume
 
         walls = dict.fromkeys(n, 0.0)
-        ion_energy = 0.0
+        ion_energy = 0.0  # kinetic, from the presheath
+        sheath = 0.0  # sum of Z loss V_f over the ions
         for ion in self._charged:
             if ion.charge < 0:
                 continue  # held by the sheath
@@ -454,7 +459,8 @@ class GlobalModel:
             change[ion.name] -= loss
             gross[ion.name] += loss
             floating = te * np.log(np.sqrt(ion.mass / (2.0 * np.pi * ELECTRON_MASS)))
-            ion_energy += loss * (0.5 * te + ion.charge * floating)
+            ion_energy += loss * 0.5 * te
+            sheath += ion.charge * loss * floating
             for product, count in self.ion_wall_products.get(ion.name, {}).items():
                 change[product] += count * loss
         for wall in self.wall_reactions:
@@ -494,7 +500,19 @@ class GlobalModel:
             + net_charge_source
         )
         walls["e"] = electron_wall
-        power["walls"] = -(electron_wall * 2.0 * te + ion_energy) * E * volume
+        # every electron leaving climbs the presheath (T_e / 2) and the sheath, whose
+        # drop falls by T_e ln(Gamma_e / Gamma_+) when the sources add net negative
+        # charge; that energy goes to the ions, or with the extra electrons to the wall
+        positive = sum(
+            ion.charge * walls[ion.name] for ion in self._charged if ion.charge > 0
+        )
+        if electron_wall > 0.0 and positive > 0.0:
+            drop = sheath / positive - te * np.log(electron_wall / positive)
+        else:
+            drop = sheath / positive if positive > 0.0 else 0.0
+        climbed = ion_energy + positive * drop
+        climbed += (electron_wall - positive) * (0.5 * te + drop)
+        power["walls"] = -(electron_wall * 2.0 * te + climbed) * E * volume
 
         # the electron density follows the charged species
         change["e"] = sum(s.charge * change[s.name] for s in self._charged)

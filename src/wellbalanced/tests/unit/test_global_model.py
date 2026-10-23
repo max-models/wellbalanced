@@ -202,6 +202,15 @@ def test_a_beam_source_of_electrons_drives_the_plasma() -> None:
     assert sum(state.power.values()) == pytest.approx(
         0.0, abs=1e-8 * state.power["stripping"]
     )
+    # every electron leaves over the presheath and a sheath lowered by the extra ones:
+    # Gamma_e (5/2 T_e + V_f - T_e ln(Gamma_e / Gamma_+)) at the walls
+    te = state.electron_temperature
+    electrons, ions = state.wall_losses["e"], state.wall_losses["Ar+"]
+    floating = te * math.log(math.sqrt(AR_ION.mass / (2.0 * math.pi * ELECTRON_MASS)))
+    sheath = floating - te * math.log(electrons / ions)
+    assert -state.power["walls"] == pytest.approx(
+        electrons * (2.5 * te + sheath) * E * CHAMBER.volume, rel=1e-12
+    )
 
 
 def test_bad_models_are_refused() -> None:

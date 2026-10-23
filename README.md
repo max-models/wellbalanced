@@ -56,7 +56,8 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   states, with cross sections that may depend on the energy and
   secondary electrons of the mean energy of their distribution
   (e.g. Rudd’s, from plasmacoll); the same sources drive a `Fluid1D`
-  across the channel.
+  across the channel, whose average over the width reproduces the global
+  model (electron temperature within 0.1%, densities within 3%).
 - **The inductive RF field of a driver** (`InductiveField2D`,
   `wellbalanced.spatial`): the magnetoquasistatic vector potential of
   coil windings, perfect conductors (backplates, electromagnetic

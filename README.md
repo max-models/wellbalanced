@@ -57,7 +57,11 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   secondary electrons of the mean energy of their distribution
   (e.g. Rudd’s, from plasmacoll); the same sources drive a `Fluid1D`
   across the channel, whose average over the width reproduces the global
-  model (electron temperature within 0.1%, densities within 3%).
+  model (electron temperature within 0.1%, densities within 3%). The gas
+  along the channel is a `GasProfile`: Knudsen diffusion from the feed
+  to the open ends, or the profile of a kinetic run such as picnic’s
+  `NeutralParticleTransport`; every axial slice’s own plasma comes from
+  `Neutralizer.local_plasma`.
 - **The inductive RF field of a driver** (`InductiveField2D`,
   `wellbalanced.spatial`): the magnetoquasistatic vector potential of
   coil windings, perfect conductors (backplates, electromagnetic

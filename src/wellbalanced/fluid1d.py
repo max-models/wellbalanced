@@ -69,7 +69,14 @@ from wellbalanced.global_model import VolumeSource
 from wellbalanced.reactions import Reaction
 from wellbalanced.species import Species
 
-__all__ = ["Boundary", "Fluid1D", "FluidSpecies", "FluidState", "PotentialBoundary"]
+__all__ = [
+    "Boundary",
+    "Fluid1D",
+    "FluidSpecies",
+    "FluidState",
+    "PotentialBoundary",
+    "scharfetter_gummel",
+]
 
 E = ELEMENTARY_CHARGE
 EPSILON_0 = 8.8541878128e-12
@@ -96,6 +103,34 @@ def _bernoulli(x: np.ndarray) -> np.ndarray:
     x2 = x * x
     series = 1.0 - 0.5 * x + x2 / 12.0 - x2 * x2 / 720.0
     return np.where(small, series, value)
+
+
+def scharfetter_gummel(
+    z: int,
+    mu: np.ndarray,
+    d: np.ndarray,
+    efield: np.ndarray,
+    left: np.ndarray,
+    right: np.ndarray,
+    distance: float | np.ndarray,
+) -> np.ndarray:
+    """The Scharfetter-Gummel flux from ``left`` to ``right``, a ``distance`` apart.
+
+    ``z`` is the charge number, ``mu`` and ``d`` the mobility and diffusion and
+    ``efield`` the field along the line from ``left`` to ``right``; exact for a constant
+    field between the two points. Without diffusion the flux is the upwind drift.
+    """
+    with np.errstate(divide="ignore", invalid="ignore"):
+        peclet = np.where(
+            d > 0.0, z * mu * efield * distance / np.where(d > 0, d, 1.0), 0.0
+        )
+    drift_only = d <= 0.0
+    flux = (d / distance) * (_bernoulli(-peclet) * left - _bernoulli(peclet) * right)
+    if np.any(drift_only):
+        v = z * mu * efield
+        upwind = np.where(v > 0.0, v * left, v * right)
+        flux = np.where(drift_only, upwind, flux)
+    return flux
 
 
 @dataclass(frozen=True)
@@ -499,19 +534,7 @@ class Fluid1D:
         distance: float,
     ) -> np.ndarray:
         """Scharfetter-Gummel flux between densities ``left`` and ``right`` a ``distance`` apart."""
-        with np.errstate(divide="ignore", invalid="ignore"):
-            peclet = np.where(
-                d > 0.0, z * mu * efield * distance / np.where(d > 0, d, 1.0), 0.0
-            )
-        drift_only = d <= 0.0
-        flux = (d / distance) * (
-            _bernoulli(-peclet) * left - _bernoulli(peclet) * right
-        )
-        if np.any(drift_only):
-            v = z * mu * efield
-            upwind = np.where(v > 0.0, v * left, v * right)
-            flux = np.where(drift_only, upwind, flux)
-        return flux
+        return scharfetter_gummel(z, mu, d, efield, left, right, distance)
 
     def _boundary_flux(
         self,

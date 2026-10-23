@@ -1,6 +1,6 @@
 ---
 title: 3D field discretisation
-description: The evidence for step R4's decision, staircased Cartesian edges against analytic and NGSolve references.
+description: The evidence for step R4's decision, staircased and cut-cell Cartesian edges against analytic and NGSolve references.
 ---
 
 Step R4 of the RF-driver plan decides how the 3D inductive field is discretised:
@@ -113,6 +113,15 @@ average (`samples=3`):
 
 ### The finite tube in 3D (one eighth, staircased)
 
+*Note from the second round:* two discretisation errors of the coil, not of the tube,
+are in this table. On the 3.33 and 2 mm grids the coil's 45 mm half-side is not on the
+grid, and its staircased cross-section changes the field by up to 20 %. And a coil's `T`
+was sampled at the face centres, so the faces in the plane of its end (80 mm, on the
+grid) counted fully and the coil was half a cell too long (inductance +3.1 % at 5 mm,
++1.6 % at 2.5 mm for the coil alone); `T` is now averaged over the face's dual edge, and
+the coil alone converges at second order (−0.47 %, −0.14 %, −0.07 % at 5, 2.5 and
+1.67 mm against NGSolve).
+
 Relative error of the loss against NGSolve. The references are 0.964, 2.831, 0.964,
 4.279, 0.0568 and 2.281 mW for the eighth at 1 A, in the order of the columns.
 
@@ -140,16 +149,106 @@ Copper at 1 MHz has a skin depth of 66 µm. With δ = 0.71 mm (500 kHz) the loss
 is −78 %, −56 % and −24 %. A volume-resolved metal needs `h ≲ δ / 2`, so the shield of a
 real driver needs a surface impedance whatever the grid.
 
+## Cut cells with a surface impedance
+
+The second round of R4 adds the two things the recommendation below asked for in the
+conductors: **cut-cell (conformal) geometry** and a **surface impedance**, and an
+iterative solver. The numbers come from `benchmarks/field3d_r4_cutcell.py` and
+`benchmarks/slotted_cylinder_ngsolve_sibc.py`.
+
+**The model.** An `ImpedanceConductor3D` drops out of the field: the edges entirely
+inside it are not unknowns, and on its surface Leontovich's condition
+`E_t = Z_s H x n` holds, `Z_s = (1 + i) / (sigma delta)`. This is right where the skin
+depth is small against the wall and its radii of curvature: copper at MHz, the Faraday
+shield, the coil.
+
+**The discretisation** (Dey and Mittra's conformal faces, here in the frequency
+domain). A cut face's flux `b_f` is the line integral of `A` around its part outside
+the metal: the unknown edges' parts outside plus the stretch along the surface, where
+`A_t = (i / omega) Z_s H x n`. With `H` tangent to a good conductor that stretch is
+`(i Z_s / omega) H_f w_f`, `w_f` the surface's width in the face (its trace divided by
+the sine between the surface and the face's normal). So
+`H_f = b_f / (mu0 A_f^air - i Z_s w_f / omega)`: only the face reluctances change, the
+curl stays the incidence matrix. The losses are `1/2 Re(Z_s) |H_f|^2 w_f L*_f`, equal to
+the coil's power to round-off. The geometry comes from simgeometry's new
+`yee_fractions` (simgeometry#26): the edge-length and face-area fractions and the traces,
+exact for planes, second order for curved surfaces, slits narrower than a cell kept,
+walls on grid lines treated like a staircase. `cut_cells=False` staircases the same
+model (the metal is the cells whose centre is inside), for comparison.
+
+**Closed forms (tests).** In a z-invariant solenoid `H_z` is uniform in each connected
+region of air, which gives the loss of any conductor from its perimeter and area. A
+tilted plane wall: exact (to `1e-5`, the gauge). The tube without slits: −0.009 %,
+−0.004 %, −0.002 % and −0.001 % at h = 2.5, 1.67, 1.25 and 0.625 mm (second order);
+staircased +22 % to +28 % on every grid. A staircase is `4 / pi` too long for a circle,
+and the loss is proportional to the surface: it never converges.
+
+### The infinite tube (z-periodic quarter)
+
+Relative error of the loss against NGSolve with the same surface impedance (order 4 on
+curved meshes; three meshes agree to `1e-7`). Skin depths 2.25, 0.71 and 0.225 mm in the
+6 mm wall; the slits 4 mm.
+
+| variant | 5 mm | 2.5 mm | 1.67 mm | 1.25 mm | 0.625 mm |
+| --- | --- | --- | --- | --- | --- |
+| none, cut cells (all three frequencies) | +10.6 to +12.8 % | −0.009 % | −0.004 % | −0.002 % | −0.001 % |
+| none, staircase | +23 to +24 % | +22 to +23 % | +28 to +30 % | +27 to +28 % | +26 to +28 % |
+| through slits, 50 kHz, cut cells | −0.51 % | −0.07 % | +0.22 % | −0.06 % | −0.06 % |
+| through slits, 500 kHz, cut cells | −0.53 % | −0.07 % | +0.24 % | −0.07 % | −0.07 % |
+| through slits, 5 MHz, cut cells | −0.54 % | −0.07 % | +0.24 % | −0.07 % | −0.07 % |
+| through slits, staircase | +8 to +9 % | +19 to +21 % | +27 to +30 % | +23 to +25 % | +23 to +25 % |
+| 500 kHz, volume conductor (staircased, `field3d_r4.py`) | −83 / −85 % | −66 / −67 % | −50 / −53 % | −37 / −39 % | −12 / −15 % |
+
+- At h = 5 mm (a cell close to the wall, 6 mm) an edge can reach through the wall and
+  couple the bore to the outside: +11 % without slits. From h = t/2.4 on the cut cells
+  are within 0.25 %.
+- With slits the cut cells settle at −0.07 % of NGSolve, independent of the frequency;
+  the remainder is at the slit's corners, where both the field and the trace have
+  corners. The inductance is within 0.01 % from h = 2.5 mm.
+- A volume conductor at 500 kHz is 12–15 % low even at h = 0.625 mm (δ/h = 1.1).
+
+**The surface impedance's own error** (against NGSolve's volume conductor, boundary-layer
+meshes resolving the skin, two meshes agree to `2e-6`):
+
+| | 50 kHz (δ/t = 0.38) | 500 kHz (0.12) | 5 MHz (0.04) |
+| --- | --- | --- | --- |
+| no slits | +3.7 % | +1.0 % | +0.31 % |
+| through slits | +9.2 % | +3.5 % | +1.0 % |
+
+It falls as `δ`: the curvature (`δ / 2R`) without slits, and the slits' corners with
+them. At 5 kHz (δ = 7.1 mm, more than the wall) the surface impedance does not apply:
+the original 5 kHz and 50 kHz tests of the first round stay volume problems.
+
+### The finite tube in 3D (one eighth)
+
+(in progress)
+
 ## What it costs
 
-- **Yee grid:** the direct solve takes 40–60 s for 65 000 unknowns (24 × 24 × 40 cells)
-  and about 2 min for 129 000 (h = 2 mm, a third of the wall). The cost grows as the
-  square of the unknowns, so the 3D convergence study of the slotted cylinder stops
-  there.
+- **Yee grid, direct:** the direct solve takes 40–60 s for 65 000 unknowns (24 × 24 × 40
+  cells) and about 2 min for 129 000 (h = 2 mm, a third of the wall), on a quiet machine;
+  320 s for 62 000 on a loaded one. The cost grows as the square of the unknowns.
+- **Yee grid, iterative** (`solve(solver="iterative")`, second round): COCG with Hiptmair
+  and Xu's auxiliary-space preconditioner, the two nodal problems by a geometric
+  multigrid V-cycle on the grid's nodes (no algebraic multigrid needed on a Cartesian
+  grid), to a relative residual of `1e-8`. 97 iterations at 7 500 unknowns, 38 at 62 000,
+  44 at 216 000: 26 s instead of 320 s at 62 000, 2–3 min at 216 000 (a loaded machine,
+  two threads). Cut cells' small faces do not slow it down. Agrees with the direct solve
+  to `1e-8`.
 - **NGSolve:** 0.29 M degrees of freedom (order 3, mesh 3 mm in the tube) give the loss
   to 0.12 % in 15–45 s, with BDDC and conjugate gradients.
 
 ## Recommendation (evidence for your decision)
+
+*Second round (cut cells):* for metal with a skin depth below the grid, Cartesian edges
+with cut-cell surface-impedance conductors are accurate: 0.01 % on the tube and 0.07 %
+with slits narrower than a cell in z-invariant geometry, second order, where the
+staircase stays 20–30 % off on every grid; 0.2 % for a sphere in 3D. The 3D corners
+(the tube's and the slits' ends) converge at first order, 1–5 % at h = 2.5 mm, so the
+Faraday shield's slit ends need the corner treatment above (or local refinement) before
+R_net is trusted to a per cent. With the iterative solver the grids of the slotted
+cylinder (2·10^5 unknowns) take minutes. The first round's text follows.
+
 
 **Plain staircasing is not accurate enough for the slit losses at affordable grids.**
 
@@ -186,10 +285,17 @@ need multipatch domains there.
 
 ## What is left
 
-- Cut-cell (conformal) edges and a surface impedance for the metal, and the same slit
-  test with them.
+- Done in the second round: cut-cell surface-impedance conductors, the slit test with
+  them, and the iterative solver.
+- The 3D corners: the cut cells use only each face's normal `H`, which is second order
+  on smooth and z-invariant surfaces but first order, and 1–5 % at h = 2.5 mm, at the
+  tube's ends and the slits' ends. A corner-aware weight (or the tangential `H` of the
+  neighbouring faces in the surface term) is the next step.
+- Volume conductors with cut cells, for metal whose skin depth is comparable to its
+  thickness (the 5 kHz case): the sub-cell conductance of the first round does not do
+  it.
 - Edge operators in patchwork. Patchwork's operators today are cell-centred and 2D,
   so they cannot refine the 3D field.
-- An iterative solver (auxiliary-space preconditioned) for grids beyond about 10^5
-  edges.
+- The iterative solver on mpiarray and cunumpy (it is all sparse products and a
+  multigrid on a Cartesian grid).
 - The helical coil, the Faraday shield of BUG and ELISE, and R_net.

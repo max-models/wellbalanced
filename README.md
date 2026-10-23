@@ -84,8 +84,10 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   walls (or Poisson’s equation, which on a slab is `Fluid1D`), heated by
   the field’s `1/2 Re(J E*)` and pushed off the coil by its RF Lorentz
   force; `fluid_plasma` iterates field and fluid to a fixed point for
-  `DriverCoupling`. On a tensor grid or a single-level patch grid
-  (refined patches wait for patchwork’s refluxing).
+  `DriverCoupling`. On a tensor grid or on refined patches: one implicit
+  step of all levels, one flux per leaf face, so particles and energy
+  are conserved to round-off across levels (what patchwork’s refluxing
+  restores).
 - **A 0D RF driver** (`RFDriver`, `wellbalanced.driver`): the global
   model of the driver plasma coupled to a transformer model of the coil,
   giving the coil current and the RF power transfer efficiency against

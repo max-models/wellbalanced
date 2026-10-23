@@ -82,6 +82,15 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   force; `fluid_plasma` iterates field and fluid to a fixed point for
   `DriverCoupling`. On a tensor grid or a single-level patch grid
   (refined patches wait for patchwork’s refluxing).
+- **The driver’s gas** (`NeutralFluid2D`, `wellbalanced.spatial`): H and
+  H2 as two Navier–Stokes fluids (density, velocity and temperature
+  each; the model of Zielke et al., PSST 31, 035019, 2022) on the
+  plasma’s cells, with the plasma’s reactions (dissociation, ionization,
+  Franck–Condon heating), collisions with the ions (charge exchange) and
+  kinetic walls: atoms recombining with a probability, ions coming back
+  as gas, a gas inlet and a grid of some transparency. `couple_neutrals`
+  iterates it with `Fluid2D` to a common steady state, so the gas thins
+  and heats where the plasma is.
 - **A 0D RF driver** (`RFDriver`, `wellbalanced.driver`): the global
   model of the driver plasma coupled to a transformer model of the coil,
   giving the coil current and the RF power transfer efficiency against

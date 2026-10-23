@@ -1095,6 +1095,26 @@ class Fluid2D:
             factor * self._on_cells(force[1]),
         )
 
+    def set_gas(
+        self,
+        densities: Mapping[str, CellField] | None = None,
+        temperature: float | None = None,
+    ) -> None:
+        """Change the fixed species' densities [m^-3] and the gas temperature [eV].
+
+        The gas of a neutral model (:func:`~wellbalanced.spatial.couple_neutrals`):
+        ``densities`` replace those of fixed species by name (cell fields).
+        """
+        for name, value in (densities or {}).items():
+            if name not in self._fixed:
+                raise ValueError(f"{name!r} is not a fixed species")
+            self._fixed[name] = self._on_cells(value)
+        if temperature is not None:
+            if temperature <= 0.0:
+                raise ValueError("the gas temperature must be > 0")
+            self.gas_temperature = float(temperature)
+        self._rate_cache.clear()  # the gas temperature enters the coefficients
+
     def collision_frequency(self, state: Fluid2DState) -> np.ndarray:
         """The electrons' momentum-transfer frequency ``nu`` [1/s], zero outside."""
         densities, _, te, _ = self._unpack(state.unknowns)

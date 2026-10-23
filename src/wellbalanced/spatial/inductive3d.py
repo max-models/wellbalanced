@@ -349,20 +349,43 @@ class InductiveField3D:
     # --- sources and materials -----------------------------------------------------
 
     def _coil_source(self) -> np.ndarray:
-        """``j = C^T (T L*)`` for 1 A [A], with ``T`` on the faces inside each coil."""
+        """``j = C^T (T L*)`` for 1 A [A], with ``T`` on the faces inside each coil.
+
+        A face's ``T`` is the coil's indicator averaged over its dual edge (its two
+        halves' midpoints, the one inside the box on a boundary face), so that a face
+        on the coil's surface, e.g. in the plane of a solenoid's end, counts half: with
+        the indicator at the face's centre such a coil was half a cell too long.
+        """
         grid = self.grid
         centres = grid.face_centres()
         normals = grid.face_axes()
+        lower, upper = (
+            np.zeros(grid.n_faces, dtype=bool),
+            np.zeros(grid.n_faces, dtype=bool),
+        )
+        for a in range(3):
+            first, last = grid._ends(grid.face_shape(a), a)
+            block = slice(grid.face_offsets[a], grid.face_offsets[a + 1])
+            lower[block], upper[block] = first.ravel(), last.ravel()
+        quarter = 0.25 * grid.spacing[normals]
+        samples = []
+        for sign, beyond in ((-1.0, lower), (1.0, upper)):
+            points = centres.copy()
+            points[normals, np.arange(grid.n_faces)] += sign * quarter
+            samples.append((points, ~beyond))
         t = np.zeros(grid.n_faces)
         for coil in self.coils:
             direction = np.asarray(coil.direction, dtype=float)
             if direction.shape != (3,) or not np.any(direction):
                 raise ValueError("a coil needs a nonzero 3D direction")
             direction = direction / np.linalg.norm(direction)
-            inside = grid.contains(coil.shape, centres)
-            if not inside.any():
-                raise ValueError(f"coil {coil.name!r} contains no face centre")
-            t[inside] += coil.turns_per_length * direction[normals[inside]]
+            weight = np.zeros(grid.n_faces)
+            for points, valid in samples:
+                weight += valid * grid.contains(coil.shape, points)
+            weight /= samples[0][1].astype(float) + samples[1][1]
+            if not weight.any():
+                raise ValueError(f"coil {coil.name!r} contains no face")
+            t += weight * coil.turns_per_length * direction[normals]
         return np.asarray(_curl(grid).T @ (t * grid.dual_lengths))
 
     def _edge_conductivity(

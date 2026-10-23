@@ -105,7 +105,10 @@ class _Multigrid:
             matrix = sp.csr_matrix(prolongation.T @ matrix @ prolongation)
             lattice, active = coarse_lattice, coarse_active
         self.levels.append((matrix, 1.0 / diagonal, None))
-        self.coarse = spla.splu(sp.csc_matrix(matrix))
+        # unknowns no edge reaches (e.g. a component of the nodal field none of a
+        # node's edges is along) have empty rows: a unit diagonal keeps them at zero
+        empty = np.asarray(abs(matrix).sum(axis=1)).ravel() == 0
+        self.coarse = spla.splu(sp.csc_matrix(matrix + sp.diags(empty.astype(float))))
 
     def _cycle(self, level: int, rhs: np.ndarray) -> np.ndarray:
         matrix, inverse, prolongation = self.levels[level]

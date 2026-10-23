@@ -243,6 +243,34 @@
    "elements": 14255,
    "iterations": 72,
    "seconds": 66.05293899998651
+  },
+  {
+   "slits": "through",
+   "frequency": 50000.0,
+   "mesh": 2,
+   "maxh_metal": 0.0013333333333333333,
+   "order": 3,
+   "loss": 0.0024829272386757916,
+   "resistance": 0.004965854477351583,
+   "inductance": 7.928827971668287e-07,
+   "ndof": 870368,
+   "elements": 32914,
+   "iterations": 77,
+   "seconds": 1085.2900549579936
+  },
+  {
+   "slits": "through",
+   "frequency": 500000.0,
+   "mesh": 2,
+   "maxh_metal": 0.0013333333333333333,
+   "order": 3,
+   "loss": 0.008593391259681745,
+   "resistance": 0.01718678251936349,
+   "inductance": 7.807818863679741e-07,
+   "ndof": 870368,
+   "elements": 32914,
+   "iterations": 78,
+   "seconds": 223.88454112500767
   }
  ]
 }

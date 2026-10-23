@@ -235,8 +235,9 @@ def test_infinite_tube_loss_converges_to_the_bessel_solution():
 
 def tube_model(lower, upper, cells, boundaries, **settings):
     grid = EdgeGrid(lower, upper, cells, boundaries)
-    # no surface through a node plane: the two grids sample the same points
-    coil = Coil3D(Cuboid((0, 0, 0), (0.12, 0.12, 0.145)), (0, 0, 1), 100.0)
+    # no surface through a node plane or a coil sample (a quarter cell off a node
+    # plane): the two grids sample the same points
+    coil = Coil3D(Cuboid((0, 0, 0), (0.12, 0.12, 0.146)), (0, 0, 1), 100.0)
     tube = Tube((0, 0, -0.043), (0, 0, 0.043), 0.0253, 0.0447)
     slit = Cuboid((0, 0, 0), (0.2, 0.012, 0.065))
     return InductiveField3D(
@@ -311,7 +312,7 @@ def test_invalid_input():
         InductiveField3D(grid, frequency=0.0)
     with pytest.raises(ValueError, match="regularization"):
         InductiveField3D(grid, frequency=1.0, regularization=0.0)
-    with pytest.raises(ValueError, match="no face centre"):
+    with pytest.raises(ValueError, match="contains no face"):
         InductiveField3D(
             grid, frequency=1.0, coils=[Coil3D(Cuboid((5, 5, 5), (0.1, 0.1, 0.1)))]
         )

@@ -138,7 +138,8 @@ def test_impedance_tube_converges_at_second_order_and_staircase_does_not():
     assert scale * stairs.loss / loss - 1 > 0.2
 
 
-def test_iterative_solver_matches_the_direct_one():
+@pytest.mark.parametrize("conductor", ["slotted tube", "sphere"])
+def test_iterative_solver_matches_the_direct_one(conductor):
     h = 0.005
     grid = EdgeGrid(
         (0, 0, 0),
@@ -149,6 +150,8 @@ def test_iterative_solver_matches_the_direct_one():
     tube = Tube((0, 0, -0.05), (0, 0, 0.05), 0.03, 0.036) - Cuboid(
         (0, 0, 0), (0.24, 0.004, 0.08)
     )
+    if conductor == "sphere":  # nodes none of whose free edges is along an axis
+        tube = simgeometry.Sphere((0, 0, 0), 0.025)
     model = InductiveField3D(
         grid,
         frequency=5e5,

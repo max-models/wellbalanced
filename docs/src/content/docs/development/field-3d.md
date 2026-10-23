@@ -1,6 +1,6 @@
 ---
 title: 3D field discretisation
-description: The evidence for step R4's decision, staircased Cartesian edges against analytic and NGSolve references.
+description: The evidence for step R4's decision, staircased and cut-cell Cartesian edges against analytic and NGSolve references.
 ---
 
 Step R4 of the RF-driver plan decides how the 3D inductive field is discretised:
@@ -113,6 +113,15 @@ average (`samples=3`):
 
 ### The finite tube in 3D (one eighth, staircased)
 
+*Note from the second round:* two discretisation errors of the coil, not of the tube,
+are in this table. On the 3.33 and 2 mm grids the coil's 45 mm half-side is not on the
+grid, and its staircased cross-section changes the field by up to 20 %. And a coil's `T`
+was sampled at the face centres, so the faces in the plane of its end (80 mm, on the
+grid) counted fully and the coil was half a cell too long (inductance +3.1 % at 5 mm,
++1.6 % at 2.5 mm for the coil alone); `T` is now averaged over the face's dual edge, and
+the coil alone converges at second order (−0.47 %, −0.14 %, −0.07 % at 5, 2.5 and
+1.67 mm against NGSolve).
+
 Relative error of the loss against NGSolve. The references are 0.964, 2.831, 0.964,
 4.279, 0.0568 and 2.281 mW for the eighth at 1 A, in the order of the columns.
 
@@ -216,14 +225,30 @@ the original 5 kHz and 50 kHz tests of the first round stay volume problems.
 
 ## What it costs
 
-- **Yee grid:** the direct solve takes 40–60 s for 65 000 unknowns (24 × 24 × 40 cells)
-  and about 2 min for 129 000 (h = 2 mm, a third of the wall). The cost grows as the
-  square of the unknowns, so the 3D convergence study of the slotted cylinder stops
-  there.
+- **Yee grid, direct:** the direct solve takes 40–60 s for 65 000 unknowns (24 × 24 × 40
+  cells) and about 2 min for 129 000 (h = 2 mm, a third of the wall), on a quiet machine;
+  320 s for 62 000 on a loaded one. The cost grows as the square of the unknowns.
+- **Yee grid, iterative** (`solve(solver="iterative")`, second round): COCG with Hiptmair
+  and Xu's auxiliary-space preconditioner, the two nodal problems by a geometric
+  multigrid V-cycle on the grid's nodes (no algebraic multigrid needed on a Cartesian
+  grid), to a relative residual of `1e-8`. 97 iterations at 7 500 unknowns, 38 at 62 000,
+  44 at 216 000: 26 s instead of 320 s at 62 000, 2–3 min at 216 000 (a loaded machine,
+  two threads). Cut cells' small faces do not slow it down. Agrees with the direct solve
+  to `1e-8`.
 - **NGSolve:** 0.29 M degrees of freedom (order 3, mesh 3 mm in the tube) give the loss
   to 0.12 % in 15–45 s, with BDDC and conjugate gradients.
 
 ## Recommendation (evidence for your decision)
+
+*Second round (cut cells):* for metal with a skin depth below the grid, Cartesian edges
+with cut-cell surface-impedance conductors are accurate: 0.01 % on the tube and 0.07 %
+with slits narrower than a cell in z-invariant geometry, second order, where the
+staircase stays 20–30 % off on every grid; 0.2 % for a sphere in 3D. The 3D corners
+(the tube's and the slits' ends) converge at first order, 1–5 % at h = 2.5 mm, so the
+Faraday shield's slit ends need the corner treatment above (or local refinement) before
+R_net is trusted to a per cent. With the iterative solver the grids of the slotted
+cylinder (2·10^5 unknowns) take minutes. The first round's text follows.
+
 
 **Plain staircasing is not accurate enough for the slit losses at affordable grids.**
 
@@ -260,10 +285,17 @@ need multipatch domains there.
 
 ## What is left
 
-- Cut-cell (conformal) edges and a surface impedance for the metal, and the same slit
-  test with them.
+- Done in the second round: cut-cell surface-impedance conductors, the slit test with
+  them, and the iterative solver.
+- The 3D corners: the cut cells use only each face's normal `H`, which is second order
+  on smooth and z-invariant surfaces but first order, and 1–5 % at h = 2.5 mm, at the
+  tube's ends and the slits' ends. A corner-aware weight (or the tangential `H` of the
+  neighbouring faces in the surface term) is the next step.
+- Volume conductors with cut cells, for metal whose skin depth is comparable to its
+  thickness (the 5 kHz case): the sub-cell conductance of the first round does not do
+  it.
 - Edge operators in patchwork. Patchwork's operators today are cell-centred and 2D,
   so they cannot refine the 3D field.
-- An iterative solver (auxiliary-space preconditioned) for grids beyond about 10^5
-  edges.
+- The iterative solver on mpiarray and cunumpy (it is all sparse products and a
+  multigrid on a Cartesian grid).
 - The helical coil, the Faraday shield of BUG and ELISE, and R_net.

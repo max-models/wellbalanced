@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import scipy.sparse as sp
 
-from wellbalanced.spatial.grid import AxisBoundary, CellField, Geometry
+from wellbalanced.spatial.grid import AxisBoundary, CellField, Geometry, TransportFaces
 
 if TYPE_CHECKING:
     from patchwork import AMRHierarchy, CellOperator
@@ -396,6 +396,57 @@ class PatchGrid:
                 edge = edge[~(boundary["rectangle"] & (boundary["side"] == 0))]
             result[edge[inside[edge]]] = True
         return result & inside
+
+    def transport_faces(self) -> TransportFaces:
+        """The faces of the leaf cells for finite-volume transport, on one level only.
+
+        Conservative transport across coarse–fine faces, stepped in time level by level,
+        needs patchwork's refluxing (``patchwork_plan.md``, 4c), not merged yet: until
+        then a hierarchy with refined levels raises ``NotImplementedError``.
+        """
+        if self.num_levels > 1:
+            raise NotImplementedError(
+                "transport on refined patches needs patchwork's refluxing (its plan, "
+                "4c); use a single-level PatchGrid or a CellGrid"
+            )
+        cells = self.cells
+        centres = np.stack([self.x, self.y], axis=1)
+        (x0, x1), (y0, y1) = self.hierarchy.bounds
+        length = (x1 - x0, y1 - y0)
+        interior, boundary = [], []
+        for axis in (0, 1):
+            faces = cells.faces(axis)
+            low, high = faces["low"], faces["high"]
+            area, position, _ = cells.face_metric(
+                axis, faces["plane"], faces["start"], faces["count"]
+            )
+            delta_low = position - centres[low, axis]
+            delta_high = centres[high, axis] - position
+            # across a periodic seam the face is at the upper edge
+            delta_high = np.where(
+                delta_high < 0.0, delta_high + length[axis], delta_high
+            )
+            interior.append(
+                (low, high, np.full(low.shape, axis), area, delta_low, delta_high)
+            )
+            if self.boundaries[axis] == "periodic":
+                continue
+            edge = cells.boundary(axis)
+            area, position, _ = cells.face_metric(
+                axis, edge["plane"], edge["start"], edge["count"]
+            )
+            cell = edge["cell"]
+            boundary.append(
+                (
+                    cell,
+                    np.full(cell.shape, axis),
+                    edge["side"],
+                    area,
+                    np.abs(position - centres[cell, axis]),
+                    np.full(cell.shape, self.boundaries[axis] == "neumann"),
+                )
+            )
+        return TransportFaces.concatenate(interior, boundary)
 
     def locate(self, x: float, y: float) -> int:
         """The leaf cell containing the point ``(x, y)`` (-1 outside the domain)."""

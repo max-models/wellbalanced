@@ -43,10 +43,12 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   its closed form, the ions reaching the Bohm speed at the sheath edge with half the central
   density and `T_e ln 2` below it: the density profile within 4% at a Debye length of
   7e-3 of the size and 1.3% at 2e-3, the potential drop within 3% and 2%.
-  `FluidState.velocity` gives the mean velocity on the faces. The sheath drop, with the
-  electrons' wall flux of Hagelaar et al. (half the thermal flux of the wall cell's
-  density), is `T_e ln(v_e / (2 c_s))`: `T_e ln 2` more than a full Maxwellian at the
-  sheath edge gives, to be checked against PIC.
+  `FluidState.velocity` gives the mean velocity on the faces.
+- `Boundary.wall(thermal_share=...)`: the share of `v_th n` a wall takes, 1/2 (Hagelaar et
+  al. 2000, the default) or 1/4 (a full Maxwellian, as kinetic sheath theory and the global
+  model assume for the Boltzmann electrons of a resolved sheath). The floating sheath of the
+  presheath test is `T_e ln(s v_e / c_s)` within 5% for both: 4.8 T_e with 1/4 against 4.67
+  from kinetic theory for Ar+, and `T_e ln 2` more with 1/2.
 - Neutralizer beam sources as functions of the local beam: `Neutralizer.beam_sources(flux,
   fractions, energy)` gives the stripping, capture and gas-ionization sources where the beam
   has that particle flux, those charge-state fractions and that energy (numbers, or arrays
@@ -92,6 +94,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `Fluid1D`'s Newton solver: a central-difference Jacobian, the equations' scales held fixed
+  during each solve (so a cell's residual depends on its neighbours only and the Jacobian by
+  colours is exact), and the Bernoulli function's series to `x^4` near 0 (`1 - x/2` erred
+  by `x^2/12`, noise in the residual of a fine mesh). Newton converges quadratically again
+  with an energy equation and ion momentum; the `Fluid1D` tests run in a fifth of the time.
 - `InductiveField2D`, `InductiveSolution`, `Winding`, `Conductor` moved from
   `wellbalanced.inductive` to `wellbalanced.spatial` (still exported by `wellbalanced`);
   powers are per volume element (`cell_volumes`), `depth` is optional (an r–z solution has

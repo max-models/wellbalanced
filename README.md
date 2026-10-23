@@ -57,7 +57,11 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   secondary electrons of the mean energy of their distribution
   (e.g. Rudd’s, from plasmacoll); the same sources drive a `Fluid1D`
   across the channel, whose average over the width reproduces the global
-  model (electron temperature within 0.1%, densities within 3%).
+  model (electron temperature within 0.1%, densities within 3%). The gas
+  along the channel is a `GasProfile`: Knudsen diffusion from the feed
+  to the open ends, or the profile of a kinetic run such as picnic’s
+  `NeutralParticleTransport`; every axial slice’s own plasma comes from
+  `Neutralizer.local_plasma`.
 - **The inductive RF field of a driver** (`InductiveField2D`,
   `wellbalanced.spatial`): the magnetoquasistatic vector potential of
   coil windings, perfect conductors (backplates, electromagnetic
@@ -84,6 +88,15 @@ Global (0D) and 1D fluid models of low-temperature plasmas.
   step of all levels, one flux per leaf face, so particles and energy
   are conserved to round-off across levels (what patchwork’s refluxing
   restores).
+- **The driver’s gas** (`NeutralFluid2D`, `wellbalanced.spatial`): H and
+  H2 as two Navier–Stokes fluids (density, velocity and temperature
+  each; the model of Zielke et al., PSST 31, 035019, 2022) on the
+  plasma’s cells, with the plasma’s reactions (dissociation, ionization,
+  Franck–Condon heating), collisions with the ions (charge exchange) and
+  kinetic walls: atoms recombining with a probability, ions coming back
+  as gas, a gas inlet and a grid of some transparency. `couple_neutrals`
+  iterates it with `Fluid2D` to a common steady state, so the gas thins
+  and heats where the plasma is.
 - **A 0D RF driver** (`RFDriver`, `wellbalanced.driver`): the global
   model of the driver plasma coupled to a transformer model of the coil,
   giving the coil current and the RF power transfer efficiency against

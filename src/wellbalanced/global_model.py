@@ -716,6 +716,34 @@ class GlobalModel:
         n, gross = terms["densities"], terms["gross"]
         return max([gross[name] / n[name] for name in self._unknown] + [1.0])
 
+    def plasma_potential(self, state: GlobalState) -> float:
+        """The plasma's potential over the floating walls (V): presheath plus sheath.
+
+        ``T_e / 2`` plus the sheath drop of the module docstring, the ions'
+        floating potentials weighted with their wall fluxes, lowered by
+        ``T_e ln(Gamma_e / Gamma_+)`` when the sources add net negative charge.
+        NaN when no positive ion reaches the walls.
+        """
+        te = state.electron_temperature
+        positive = sheath = 0.0
+        for ion in self._charged:
+            if ion.charge > 0:
+                loss = state.wall_losses.get(ion.name, 0.0)
+                positive += ion.charge * loss
+                sheath += (
+                    ion.charge
+                    * loss
+                    * te
+                    * np.log(np.sqrt(ion.mass / (2.0 * np.pi * ELECTRON_MASS)))
+                )
+        if positive <= 0.0:
+            return float("nan")
+        drop = sheath / positive
+        electrons = state.wall_losses.get("e", 0.0)
+        if electrons > 0.0:
+            drop -= te * np.log(electrons / positive)
+        return float(0.5 * te + drop)
+
     def scan(
         self, parameter: str, values: Sequence[Any], **guess: float
     ) -> list[GlobalState]:

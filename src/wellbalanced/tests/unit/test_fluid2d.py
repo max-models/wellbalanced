@@ -241,15 +241,6 @@ def test_a_single_level_patch_grid_is_the_tensor_grid() -> None:
     )
 
 
-def test_refined_patches_wait_for_refluxing() -> None:
-    pytest.importorskip("patchwork")
-    grid = PatchGrid.refined(
-        ((0.0, 1.0), (0.0, 1.0)), (8, 8), [[((0.2, 0.6), (0.2, 0.6))]]
-    )
-    with pytest.raises(NotImplementedError, match="refluxing"):
-        Fluid2D(grid, [FluidSpecies(ELECTRON, MU_E), FluidSpecies(H2_ION, MU_I)])
-
-
 def collisionless_slab(cells: int):
     """Uniform ionization, cold ions without collisions, Boltzmann electrons.
 

@@ -101,6 +101,17 @@ class TransportFaces:
     ``boundary_side`` (0 below the cell, 1 above), ``boundary_area`` and
     ``boundary_delta``; ``boundary_symmetry`` marks the edges of ``"neumann"`` axes. The
     axis of an r–z domain (no area) and periodic seams have no boundary face.
+
+    Between leaf cells of different levels (a :class:`~wellbalanced.spatial.PatchGrid`)
+    each face is as long as the finer cell's side, so a coarse cell has several faces
+    on that side, and its centre is off the line through the finer centre normal to the
+    face: ``coarse_side`` (per interior face: 0 if ``low`` is the coarser cell, 1 if
+    ``high`` is, -1 between cells of one size) marks these faces, ``coarse_neighbours``
+    are the coarser cell's neighbours of its own size along the face (below and above;
+    -1 where there is none) and ``coarse_offset`` the distance of the face's middle from
+    the coarser centre along the face, in the coarser cell's widths. A finite-volume
+    scheme interpolates the coarse value along the face to the face's middle with them
+    (a ghost value on the line of the finer centre). ``None`` on a tensor grid.
     """
 
     low: np.ndarray
@@ -115,6 +126,9 @@ class TransportFaces:
     boundary_area: np.ndarray
     boundary_delta: np.ndarray
     boundary_symmetry: np.ndarray
+    coarse_side: np.ndarray | None = None
+    coarse_neighbours: np.ndarray | None = None
+    coarse_offset: np.ndarray | None = None
 
     @property
     def distance(self) -> np.ndarray:
@@ -129,7 +143,8 @@ class TransportFaces:
     ) -> TransportFaces:
         """Faces from lists of arrays, the faces of no area dropped.
 
-        ``interior``: ``(low, high, axis, area, delta_low, delta_high)``; ``boundary``:
+        ``interior``: ``(low, high, axis, area, delta_low, delta_high)``, optionally
+        followed by ``(coarse_side, coarse_neighbours, coarse_offset)``; ``boundary``:
         ``(cell, axis, side, area, delta, symmetry)``.
         """
 
@@ -148,7 +163,18 @@ class TransportFaces:
             for k, t in enumerate((int, int, int, float, float, bool))
         ]
         keep_inner, keep_edge = inner[3] > 0.0, edge[3] > 0.0
-        return cls(*(a[keep_inner] for a in inner), *(a[keep_edge] for a in edge))
+        levels: dict[str, np.ndarray] = {}
+        if interior and len(interior[0]) > 6:
+            levels = {
+                "coarse_side": stack(interior, 6, int)[keep_inner],
+                "coarse_neighbours": np.concatenate(
+                    [np.asarray(p[7], dtype=int).reshape(-1, 2) for p in interior]
+                )[keep_inner],
+                "coarse_offset": stack(interior, 8, float)[keep_inner],
+            }
+        return cls(
+            *(a[keep_inner] for a in inner), *(a[keep_edge] for a in edge), **levels
+        )
 
 
 class CellGrid:

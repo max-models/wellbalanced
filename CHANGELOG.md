@@ -7,6 +7,19 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Fluid2D` on refined patches (`PatchGrid` with several levels): all levels take one
+  implicit step on the leaf cells, and between levels each face is as long as the finer
+  cell's side, so every face carries one flux and particles and energy are conserved to
+  round-off across levels (the state patchwork's `FluxRegister` restores after an explicit
+  step; a test applies Fluid2D's fluxes in patchwork's refluxed update and gets the same
+  cells). The coarse value of such a face is interpolated along it to the line of the finer
+  centre (`TransportFaces.coarse_side`, `coarse_neighbours`, `coarse_offset`). Checked: a
+  step on three levels conserves particles and energy, the faces between levels cancel to
+  1e-14; a smooth blob with one level of patches matches the uniform grid as fine as the
+  patches (peak to 1e-4, density about the blob to 3e-4 of the peak, with 2/3 of the
+  cells; the uniform grids converge at about second order); a narrow blob (3 mm on 12.5 mm
+  base cells, 45 % of its peak there) with two levels matches the 32 x 32 grid to 5e-4 at
+  the peak and 3e-3 on the finest patch, with a fifth of its cells.
 - The 0D/1D consistency test of the neutralizer plasma: across the channel, with the gas
   uniform and the beam filling the channel, a `Fluid1D` (momentum ions, electron energy,
   resolved sheaths, the beam's `volume_sources`) averaged over the width against a

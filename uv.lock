@@ -2879,13 +2879,14 @@ dependencies = [
 
 [[package]]
 name = "plasmacoll"
-version = "0.2.0"
-source = { git = "https://github.com/max-models/plasmacoll?branch=devel#5126f2e5123fa5a89e36f5e674067def455e1e12" }
+version = "0.3.0"
+source = { git = "https://github.com/max-models/plasmacoll?branch=devel#91ac52e540f1ca4b83703197bf2b4f87146717b4" }
 dependencies = [
     { name = "cunumpy" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "scope-profiler" },
 ]
 
 [[package]]

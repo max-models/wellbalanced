@@ -7,6 +7,28 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `NeutralFluid2D` (`wellbalanced.spatial.neutrals`, step R3.5 of the RF-driver plan):
+  the driver's gas as H and H2 Navier–Stokes fluids, each with its density, velocity and
+  temperature, the model of Zielke et al. (PSST 31, 035019, 2022, section 2.3): friction
+  and energy exchange with the other species (charge exchange with the drifting ions),
+  local viscosity and heat conduction from the same collisions, the plasma's reactions
+  (dissociation, ionization, Franck–Condon heating, the electrons' elastic heating; rates
+  from plasmacoll) with products born at their parents' velocity and temperature, and
+  the paper's kinetic walls (drifting half-Maxwellian fluxes, reflection, recombination
+  of atoms with a probability, ions coming back as gas, accommodation, a gas inlet and a
+  grid of some transparency). Finite volumes on `Fluid2D`'s cells with a Rhie–Chow face
+  flux, implicit, Newton with a batched finite-difference Jacobian. `couple_neutrals`
+  iterates it with `Fluid2D` to a common steady state (the gas as the plasma's fixed
+  species, its mean temperature as the plasma's, the ion mean free paths scaled with the
+  gas density); `Fluid2D.set_gas`. Checked: the wall fluxes against a quadrature, a
+  shear wave's decay at the viscosity of the collisions (1e-8), a trace gas diffusing at
+  the rate its friction gives (1e-3), the nuclei conserved to round-off with reflecting
+  walls (and changing by the ionized ones), the 0D limit against scipy's ODE solution
+  (first order in the step, Richardson within 1e-3), and the BUG driver at 25 kW (gas
+  balances to round-off, depleted and heated; the coupled nuclei budget within the
+  passes' tolerance). Example `rf_driver_neutrals.py`. Placeholder collision rates,
+  wall probabilities and transparencies (Zielke's thesis not yet read).
+
 - The neutralizer's gas along the channel (step 3 of the neutralizer plan): `GasProfile`, a
   free-molecular density profile for a feed (it scales with the inflow and `1 / v_mean`),
   from any arrays (e.g. picnic's `NeutralParticleTransport` with diffuse walls) or

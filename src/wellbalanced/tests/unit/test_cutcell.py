@@ -83,7 +83,10 @@ def test_cut_and_staircased_cells_agree_on_walls_on_grid_lines():
     )
     box = Cuboid((0.5, 0.4375, 0.5), (0.5, 0.375, 0.25))
     slit = Cuboid((0.5, 0.5, 0.5), (2, 2, 2)) - Cuboid((0.5, 0.5, 0.5), (0.25, 4, 4))
-    for shape in (box, slit):
+    block = Cuboid((0.5, 0.5, 0.5), (0.75, 0.75, 0.75))
+    tunnel = block - Cuboid((0.5, 0.5, 0.5), (0.25, 4, 0.5))  # walls end on the grid
+    pocket = block - Cuboid((0.5, 0.5, 0.75), (0.25, 0.25, 0.5))
+    for shape in (box, slit, tunnel, pocket):
         cut, stairs = cut_cells(grid, [shape]), staircased_cells(grid, [shape])
         np.testing.assert_array_equal(cut.edge_air, stairs.edge_air)
         np.testing.assert_array_equal(cut.face_air, stairs.face_air)

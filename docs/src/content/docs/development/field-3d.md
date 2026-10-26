@@ -221,7 +221,27 @@ the original 5 kHz and 50 kHz tests of the first round stay volume problems.
 
 ### The finite tube in 3D (one eighth)
 
-(in progress)
+Loss against NGSolve's surface impedance on fitted meshes, `tube3d` of
+`benchmarks/field3d_r4_cutcell.py` (iterative solver from 24 cells on):
+
+| 500 kHz | h = 5 mm | 2.5 mm | 1.67 mm | 1.25 mm |
+| --- | --- | --- | --- | --- |
+| no slits, cut cells | −3.3 % | +1.1 % | +0.95 % | +0.91 % |
+| no slits, staircase | +15 % | +16 % | +23 % | +22 % |
+| closed slits, cut cells | −33 % | −5.4 % | −1.2 % | −3.1 % |
+| closed slits, staircase | −21 % | +0.4 % | +12 % | +6.9 % |
+| through slits, cut cells | +5.2 % | +2.4 % | +2.0 % | +1.2 % |
+| through slits, staircase | +24 % | +19 % | +28 % | +23 % |
+
+- The cut cells converge to about 1 % without and with through slits, at first order or
+  slower: the remainder is at the tube's and the slits' ends, the 3D corners.
+- Closed slits are not monotone (−1.2 % at 1.67 mm, −3.1 % at 1.25 mm): the slit's closed
+  ends fall differently on each grid.
+- The staircase stays 20–30 % off and does not converge.
+- 50 kHz gives the same picture (cut cells +0.7 %, +1.2 % and −2.3 % at 1.25 mm). The
+  inductance is within 0.2 % from h = 2.5 mm with cut cells.
+- On a quiet machine the iterative solve takes 25–50 iterations and 3–11 s for
+  2·10^5 to 5·10^5 unknowns (two threads).
 
 ## What it costs
 

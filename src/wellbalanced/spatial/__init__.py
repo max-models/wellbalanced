@@ -9,8 +9,10 @@ prescribed plasma (:mod:`~wellbalanced.spatial.inductive`), the plasma region
 power-dependent plasma (:mod:`~wellbalanced.spatial.coupling`), and the driver plasma as a
 multi-species fluid heated by that field (:mod:`~wellbalanced.spatial.fluid`,
 :class:`Fluid2D`). The 3D field (:mod:`~wellbalanced.spatial.inductive3d`, step R4) is on
-the edges of a Cartesian :class:`~wellbalanced.spatial.edges.EdgeGrid`. The neutral fluid
-of the RF-driver plan (step R3) will join them, and the subpackage is the unit a later
+the edges of a Cartesian :class:`~wellbalanced.spatial.edges.EdgeGrid`. The neutral gas
+(H and H2 as two Navier–Stokes fluids, step R3.5: :mod:`~wellbalanced.spatial.neutrals`,
+:class:`NeutralFluid2D`) is on the plasma's cells and coupled to it by
+:func:`couple_neutrals`, and the subpackage is the unit a later
 split of wellbalanced moves as a whole (the magnetron's
 :class:`~wellbalanced.DriftFluid2D` is a candidate to join it then).
 
@@ -46,14 +48,27 @@ from wellbalanced.spatial.inductive3d import (
     InductiveField3D,
     InductiveSolution3D,
 )
+from wellbalanced.spatial.neutrals import (
+    Collision,
+    CoupledNeutrals,
+    Inlet,
+    NeutralFluid2D,
+    NeutralSpecies,
+    NeutralState,
+    Opening,
+    couple_neutrals,
+    hard_sphere,
+)
 from wellbalanced.spatial.patches import PatchGrid
 from wellbalanced.spatial.regions import PlasmaRegion
 
 __all__ = [
     "CellGrid",
     "Coil3D",
+    "Collision",
     "Conductor",
     "Conductor3D",
+    "CoupledNeutrals",
     "CoupledState",
     "DriverCoupling",
     "EdgeGrid",
@@ -61,18 +76,25 @@ __all__ = [
     "Fluid2D",
     "Fluid2DState",
     "FluidPlasma",
+    "Inlet",
     "InductiveField2D",
     "InductiveField3D",
     "InductiveSolution",
     "InductiveSolution3D",
     "InductiveState",
     "InductiveTimeStepper",
+    "NeutralFluid2D",
+    "NeutralSpecies",
+    "NeutralState",
+    "Opening",
     "PatchGrid",
     "PlasmaProfile",
     "PlasmaRegion",
     "TransportFaces",
     "Winding",
+    "couple_neutrals",
     "fluid_plasma",
     "global_model_plasma",
+    "hard_sphere",
     "stretched_edges",
 ]

@@ -75,11 +75,18 @@ Linear stability: :meth:`DriftFluid2D.linear_modes` builds the Jacobian of the d
 about a y-uniform state for one azimuthal mode, x-resolved, so the electrodes, the gradients, the Hall
 tensor and the energy equation are in it, and returns its eigenvalues and eigenvectors. Its leading
 eigenvalue is meant to agree with :func:`uniform_plasma_roots` for a uniform plasma and with a
-time-domain run fitted in its exponential-growth window (tests in ``test_driftfluid2d.py``); the same
-comparison on Boeuf's 1D state is the job of the gallery study 03, which has not been run.
+time-domain run fitted in its exponential-growth window (tests in ``test_driftfluid2d.py``). On the
+relaxed 1D state of Boeuf's case (gallery study 07) the two agree to 5 % in the growth rate, and the
+leading mode is not Boeuf's: it is driven by the ionization response (frozen, the rate falls tenfold),
+grows at 1-3e6 /s at all wavelengths and hardly propagates (a few km/s, either sign), while his
+linear phase is a gradient-drift wave at 1e7 /s, 1.6 cm, +17 km/s. The cause is the 1D state:
+its density falls towards the anode over ``L_n`` of about -5 mm at ``x = 1.8`` cm (converged
+in ``nx``) against his -2.2 mm, and :func:`boeuf_dispersion_roots` with that ``L_n`` grows a
+hundred times slower.
 
 Analytic reference: :func:`uniform_plasma_roots` and :func:`gradient_drift_roots` are the
-local dispersion relations of this system (without and with a density gradient).
+local dispersion relations of this system (without and with a density gradient), and
+:func:`boeuf_dispersion_roots` is Boeuf's (with finite Larmor radius and the grad-B drift).
 
 PLACEHOLDERS, to be checked against the sources before any physical claim: the three
 argon rate fits (ionization, excitation, momentum transfer: quoted from memory of
@@ -118,6 +125,7 @@ __all__ = [
     "argon_excitation_rate",
     "argon_ionization_rate",
     "argon_momentum_rate",
+    "boeuf_dispersion_roots",
     "exponential_field",
     "fit_mode",
     "gradient_drift_roots",
@@ -551,6 +559,56 @@ def gradient_drift_roots(
     )
     s = np.roots([quad, lin, const])
     return 1j * s
+
+
+def boeuf_dispersion_roots(
+    k: float,
+    density: float,
+    e_field: float,
+    b_field: float,
+    electron_temperature: float,
+    density_length: float,
+    field_length: float,
+    electron_collision_frequency: float,
+    ion_mass: float = 39.948 * ATOMIC_MASS - ELECTRON_MASS,
+    grad_b: bool = True,
+) -> np.ndarray:
+    """Roots ``omega`` of Boeuf's local gradient-drift relation, Eq. (1) of arXiv:2211.17051.
+
+    The local relation of the PIC study the spoke runs are compared with: magnetised electrons
+    with collisions and finite Larmor radius (``k^2 rho_e^2``), the E x B, diamagnetic and
+    grad-B drift frequencies ``omega_0 = -k E_0 / B``, ``omega_* = -k T_e / (B L_n)``,
+    ``omega_D = -2 k T_e / (B L_B)``, unmagnetised cold collisionless ions and Poisson's
+    equation (``k^2 lambda_D^2``):
+
+        (k^2 lambda_D^2 omega^2 - k^2 c_s^2) ((1 + a) omega - omega_0 - omega_D - a omega_0
+        + i a nu) + a omega^3 + (omega_* - omega_D - a omega_0 + i a nu) omega^2 = 0,
+
+    with ``a = k^2 rho_e^2``. ``density_length`` and ``field_length`` are the signed lengths
+    ``n / n'`` and ``B / B'`` (negative when the quantity falls towards the anode), ``T_e``
+    in eV, ``E_0`` in V/m. ``grad_b=False`` drops ``omega_D``. With Boeuf's parameters at
+    ``x = 1.8`` cm (``n_0 = 0.8e15`` m^-3, ``E_0 = -2200`` V/m, ``B = 6`` mT, ``T_e = 11.4``
+    eV, ``L_n = -2.2`` mm, ``L_B = -6`` mm, ``nu = 2e7`` /s) the largest growth rate is
+    1.0e7 /s at a wavelength of 1.6 cm, moving at 17 km/s along ``+E x B`` (he quotes 1.1e7
+    /s at ``k = 400`` /m and 17 km/s).
+
+    Returns:
+        The four complex roots ``omega``; ``Im omega > 0`` grows and ``Re omega / k`` is the
+        phase speed along ``+y`` (the E x B direction for ``E_0 < 0``, ``B > 0``).
+    """
+    cs2 = E * electron_temperature / ion_mass
+    omega_ce = E * b_field / ELECTRON_MASS
+    rho2 = E * electron_temperature / ELECTRON_MASS / omega_ce**2
+    lambda2 = EPSILON_0 * electron_temperature / (density * E)
+    nu = electron_collision_frequency
+    w0 = -k * e_field / b_field
+    ws = -k * electron_temperature / (b_field * density_length)
+    wd = -2.0 * k * electron_temperature / (b_field * field_length) if grad_b else 0.0
+    a = k * k * rho2
+    p1 = np.poly1d([k * k * lambda2, 0.0, -k * k * cs2])
+    p2 = np.poly1d([1.0 + a, -w0 - wd - a * w0 + 1j * a * nu])
+    p3 = np.poly1d([a, ws - wd - a * w0 + 1j * a * nu, 0.0, 0.0])
+    return np.roots((p1 * p2 + p3).coeffs)
 
 
 def _upwind3(

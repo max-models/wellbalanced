@@ -7,6 +7,12 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `boeuf_dispersion_roots` (`wellbalanced.driftfluid2d`): Boeuf's local gradient-drift
+  relation, Eq. (1) of arXiv:2211.17051 (finite Larmor radius, grad-B drift, Poisson),
+  checked against his linear phase (1e7 /s at 1.6 cm, +17 km/s). The linear stability of the
+  drift fluid's 1D Boeuf state (gallery study 07) does not reproduce that phase: its leading
+  mode is ionization-driven and hardly propagates, because the 1D density falls towards
+  the anode over L_n of about -5 mm instead of his -2.2 mm (module docstring).
 - `ImpedanceConductor3D`: good conductors of the 3D field (`InductiveField3D`) as
   surface-impedance (Leontovich) boundaries on cut cells, step R4 of the RF-driver plan.
   Dey and Mittra's conformal faces with `E_t = Z_s H x n` on the surface's part of their

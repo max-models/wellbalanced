@@ -1,0 +1,156 @@
+{
+ "case": {
+  "box": 0.06,
+  "box_z": 0.1,
+  "coil_half_side": 0.045,
+  "coil_half_length": 0.08,
+  "turns_per_length": 100.0,
+  "inner_radius": 0.03,
+  "outer_radius": 0.036,
+  "thickness": 0.006,
+  "tube_half_length": 0.05,
+  "slit_width": 0.004,
+  "slit_half_length": 0.04,
+  "conductivity": 1000000.0,
+  "frequencies": [
+   5000.0,
+   50000.0
+  ],
+  "regularization": 1e-06,
+  "maxh_air": 0.012
+ },
+ "results": [
+  {
+   "slits": "none",
+   "frequency": 50000.0,
+   "mesh": 1,
+   "maxh_skin": 0.0022507907897801275,
+   "order": 4,
+   "loss": 0.1716071697666326,
+   "resistance": 0.3432146318075495,
+   "inductance": 3.207839108640652e-05,
+   "ndof": 7750
+  },
+  {
+   "slits": "none",
+   "frequency": 50000.0,
+   "mesh": 2,
+   "maxh_skin": 0.0011253953948900637,
+   "order": 5,
+   "loss": 0.171607421831651,
+   "resistance": 0.3432148493384395,
+   "inductance": 3.2078391225493435e-05,
+   "ndof": 28140
+  },
+  {
+   "slits": "none",
+   "frequency": 500000.0,
+   "mesh": 1,
+   "maxh_skin": 0.000711762543223444,
+   "order": 4,
+   "loss": 0.5762739607561643,
+   "resistance": 1.1525493796148318,
+   "inductance": 3.125477273266151e-05,
+   "ndof": 33765
+  },
+  {
+   "slits": "none",
+   "frequency": 500000.0,
+   "mesh": 2,
+   "maxh_skin": 0.000355881271611722,
+   "order": 5,
+   "loss": 0.5762749430830784,
+   "resistance": 1.1525499777223178,
+   "inductance": 3.1254772771774356e-05,
+   "ndof": 110778
+  },
+  {
+   "slits": "none",
+   "frequency": 5000000.0,
+   "mesh": 1,
+   "maxh_skin": 0.0002250790789780127,
+   "order": 4,
+   "loss": 1.8544788430751256,
+   "resistance": 3.708962980495237,
+   "inductance": 3.099751706767332e-05,
+   "ndof": 135110
+  },
+  {
+   "slits": "none",
+   "frequency": 5000000.0,
+   "mesh": 2,
+   "maxh_skin": 0.00011253953948900635,
+   "order": 5,
+   "loss": 1.8544817675231324,
+   "resistance": 3.708963861139656,
+   "inductance": 3.099751707397962e-05,
+   "ndof": 448248
+  },
+  {
+   "slits": "through",
+   "frequency": 50000.0,
+   "mesh": 1,
+   "maxh_skin": 0.0022507907897801275,
+   "order": 4,
+   "loss": 0.1840433363377079,
+   "resistance": 0.3680873994636619,
+   "inductance": 4.310441020025506e-05,
+   "ndof": 7750
+  },
+  {
+   "slits": "through",
+   "frequency": 50000.0,
+   "mesh": 2,
+   "maxh_skin": 0.0011253953948900637,
+   "order": 5,
+   "loss": 0.1840435012699867,
+   "resistance": 0.36808713279859767,
+   "inductance": 4.310441010761429e-05,
+   "ndof": 27696
+  },
+  {
+   "slits": "through",
+   "frequency": 500000.0,
+   "mesh": 1,
+   "maxh_skin": 0.000711762543223444,
+   "order": 4,
+   "loss": 0.6456917209656866,
+   "resistance": 1.2913855838441235,
+   "inductance": 4.196674845899909e-05,
+   "ndof": 33860
+  },
+  {
+   "slits": "through",
+   "frequency": 500000.0,
+   "mesh": 2,
+   "maxh_skin": 0.000355881271611722,
+   "order": 5,
+   "loss": 0.6456926772975327,
+   "resistance": 1.2913855597982964,
+   "inductance": 4.1966748451926735e-05,
+   "ndof": 114654
+  },
+  {
+   "slits": "through",
+   "frequency": 5000000.0,
+   "mesh": 1,
+   "maxh_skin": 0.0002250790789780127,
+   "order": 4,
+   "loss": 2.1240690086539322,
+   "resistance": 4.248152597416357,
+   "inductance": 4.166923926997711e-05,
+   "ndof": 131800
+  },
+  {
+   "slits": "through",
+   "frequency": 5000000.0,
+   "mesh": 2,
+   "maxh_skin": 0.00011253953948900635,
+   "order": 5,
+   "loss": 2.12407645196477,
+   "resistance": 4.24815460284828,
+   "inductance": 4.1669239394531295e-05,
+   "ndof": 427812
+  }
+ ]
+}

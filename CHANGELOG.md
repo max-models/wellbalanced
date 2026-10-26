@@ -7,6 +7,9 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Boundary.outflow(speed)` of `Fluid1D`: the flux out of an end is the speed times the
+  density next to it, the fluid side of a two-way fluid-PIC coupling (the PIC's flux over
+  its density at the end of the overlap region).
 - `ImpedanceConductor3D`: good conductors of the 3D field (`InductiveField3D`) as
   surface-impedance (Leontovich) boundaries on cut cells, step R4 of the RF-driver plan.
   Dey and Mittra's conformal faces with `E_t = Z_s H x n` on the surface's part of their

@@ -3904,7 +3904,7 @@ wheels = [
 [[package]]
 name = "simgeometry"
 version = "0.1.1"
-source = { git = "https://github.com/max-models/simgeometry?branch=devel#be397c3b5512e90f0ba10060adf3eb099c3577c6" }
+source = { git = "https://github.com/max-models/simgeometry?branch=devel#798fa245db63cbcc8f3733e83a449f12a8f8e55c" }
 dependencies = [
     { name = "cunumpy" },
     { name = "maybempi" },

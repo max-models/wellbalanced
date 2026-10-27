@@ -397,6 +397,78 @@ class InductiveField2D:
             boundaries are the model's).
     """
 
+    # --- regions -----------------------------------------------------------------
+
+    def _check_regions(self) -> None:
+        for k, region in enumerate(self.winding_masks):
+            if not region.any():
+                raise ValueError(
+                    f"winding {self.windings[k].name or k} covers no cell centre: "
+                    "refine the grid there"
+                )
+        regions = [*self.winding_masks, *self.conductor_masks]
+        covered = np.sum(regions, axis=0) if regions else np.zeros(self.grid.shape)
+        if np.any(covered > 1):
+            raise ValueError("windings and conductors must not overlap")
+        # the plasma is the electron density outside the windings and conductors
+        self.electron_density[covered > 0] = 0.0
+
+    def _viscosity(
+        self, temperature: CellField | None, viscosity: CellField | None
+    ) -> np.ndarray | None:
+        """``mu_e`` on the cells, or ``None`` for the cold plasma (Ohm's law)."""
+        if viscosity is not None:
+            mu = self.grid.cell_field(viscosity)
+        elif temperature is not None:
+            t_e = self.grid.cell_field(temperature)
+            nu = self.collision_frequency
+            if np.any(nu[self.plasma] <= 0.0):
+                raise ValueError("a viscous plasma needs nu > 0 where n_e > 0")
+            with np.errstate(divide="ignore", invalid="ignore"):
+                mu = np.where(
+                    self.plasma,
+                    2.0 / 3.0 * self.electron_density * ELEMENTARY_CHARGE * t_e / nu,
+                    0.0,
+                )
+        else:
+            return None
+        if np.any(mu < 0.0):
+            raise ValueError("the electron viscosity must be >= 0")
+        return np.where(self.plasma, mu, 0.0)
+
+    def _unit_source(self) -> np.ndarray:
+        """``J_coil`` [A/m^2] for a coil current of 1 A through every winding."""
+        source = np.zeros(self.grid.shape)
+        for winding, region in zip(self.windings, self.winding_masks, strict=True):
+            source[region] += winding.sign / np.sum(self.grid.cell_areas[region])
+        return source
+
+    def _assemble_projection(self) -> tuple[sp.csr_matrix, list[int]]:
+        """Cells -> unknowns: a column per free cell and per floating conductor.
+
+        Grounded conductor cells have no column (``a = 0``).
+        """
+        size = self.grid.size
+        column = np.full(size, -1)
+        free = np.ones(size, dtype=bool)
+        for region in self.conductor_masks:
+            free &= ~region.ravel()
+        column[free] = np.arange(np.count_nonzero(free))
+        count = np.count_nonzero(free)
+        floating = []
+        for conductor, region in zip(
+            self.conductors, self.conductor_masks, strict=True
+        ):
+            if conductor.floating:
+                column[region.ravel()] = count
+                floating.append(count)
+                count += 1
+        cells = np.flatnonzero(column >= 0)
+        projection = sp.csr_matrix(
+            (np.ones(cells.size), (cells, column[cells])), shape=(size, count)
+        )
+        return projection, floating
+
     def __init__(
         self,
         x_edges: Sequence[float] | np.ndarray | None = None,
@@ -480,82 +552,10 @@ class InductiveField2D:
         """The shape of a field: cells along each axis, or ``(n,)`` leaf cells."""
         return self.grid.shape
 
-    # --- regions -----------------------------------------------------------------
-
-    def _check_regions(self) -> None:
-        for k, region in enumerate(self.winding_masks):
-            if not region.any():
-                raise ValueError(
-                    f"winding {self.windings[k].name or k} covers no cell centre: "
-                    "refine the grid there"
-                )
-        regions = [*self.winding_masks, *self.conductor_masks]
-        covered = np.sum(regions, axis=0) if regions else np.zeros(self.grid.shape)
-        if np.any(covered > 1):
-            raise ValueError("windings and conductors must not overlap")
-        # the plasma is the electron density outside the windings and conductors
-        self.electron_density[covered > 0] = 0.0
-
     @property
     def plasma(self) -> np.ndarray:
         """The plasma cells: a positive electron density."""
         return self.electron_density > 0.0
-
-    def _viscosity(
-        self, temperature: CellField | None, viscosity: CellField | None
-    ) -> np.ndarray | None:
-        """``mu_e`` on the cells, or ``None`` for the cold plasma (Ohm's law)."""
-        if viscosity is not None:
-            mu = self.grid.cell_field(viscosity)
-        elif temperature is not None:
-            t_e = self.grid.cell_field(temperature)
-            nu = self.collision_frequency
-            if np.any(nu[self.plasma] <= 0.0):
-                raise ValueError("a viscous plasma needs nu > 0 where n_e > 0")
-            with np.errstate(divide="ignore", invalid="ignore"):
-                mu = np.where(
-                    self.plasma,
-                    2.0 / 3.0 * self.electron_density * ELEMENTARY_CHARGE * t_e / nu,
-                    0.0,
-                )
-        else:
-            return None
-        if np.any(mu < 0.0):
-            raise ValueError("the electron viscosity must be >= 0")
-        return np.where(self.plasma, mu, 0.0)
-
-    def _unit_source(self) -> np.ndarray:
-        """``J_coil`` [A/m^2] for a coil current of 1 A through every winding."""
-        source = np.zeros(self.grid.shape)
-        for winding, region in zip(self.windings, self.winding_masks, strict=True):
-            source[region] += winding.sign / np.sum(self.grid.cell_areas[region])
-        return source
-
-    def _assemble_projection(self) -> tuple[sp.csr_matrix, list[int]]:
-        """Cells -> unknowns: a column per free cell and per floating conductor.
-
-        Grounded conductor cells have no column (``a = 0``).
-        """
-        size = self.grid.size
-        column = np.full(size, -1)
-        free = np.ones(size, dtype=bool)
-        for region in self.conductor_masks:
-            free &= ~region.ravel()
-        column[free] = np.arange(np.count_nonzero(free))
-        count = np.count_nonzero(free)
-        floating = []
-        for conductor, region in zip(
-            self.conductors, self.conductor_masks, strict=True
-        ):
-            if conductor.floating:
-                column[region.ravel()] = count
-                floating.append(count)
-                count += 1
-        cells = np.flatnonzero(column >= 0)
-        projection = sp.csr_matrix(
-            (np.ones(cells.size), (cells, column[cells])), shape=(size, count)
-        )
-        return projection, floating
 
     # --- time-harmonic -----------------------------------------------------------
 
@@ -569,18 +569,40 @@ class InductiveField2D:
             self._factorizations[key] = spla.splu(sp.csc_matrix(matrix_of()))
         return self._factorizations[key]
 
-    def solve(
-        self, coil_current: complex = 1.0, *, frequency: float | None = None
-    ) -> InductiveSolution:
-        """The time-harmonic field for a coil current amplitude [A].
+    def _conductor_currents(self, potential: np.ndarray) -> dict[str, Any]:
+        """Net currents of the conductors from Ampere's law, ``(K a) / mu0 = V J``."""
+        residual = (self._curl_curl @ potential.ravel()).reshape(self.grid.shape) / MU_0
+        return {
+            conductor.name or f"conductor {k}": self.grid.net_current(residual, region)
+            for k, (conductor, region) in enumerate(
+                zip(self.conductors, self.conductor_masks, strict=True)
+            )
+        }
 
-        ``frequency`` overrides the model's (the time-dependent form's modified
-        frequency is the use of it).
-        """
-        frequency = self.frequency if frequency is None else float(frequency)
-        if self.viscosity is None:
-            return self._solve_cold(coil_current, frequency)
-        return self._solve_viscous(coil_current, frequency)
+    def _solution(
+        self,
+        frequency: float,
+        coil_current: complex,
+        potential: np.ndarray,
+        plasma_current: np.ndarray,
+        source: np.ndarray,
+        *,
+        velocity: np.ndarray | None = None,
+        viscous_power: float = 0.0,
+    ) -> InductiveSolution:
+        return InductiveSolution(
+            grid=self.grid,
+            frequency=frequency,
+            coil_current=complex(coil_current),
+            vector_potential=potential,
+            plasma_current_density=plasma_current,
+            source_current_density=source.astype(complex),
+            electron_density=self.electron_density,
+            collision_frequency=self.collision_frequency,
+            electron_velocity=velocity,
+            viscous_power=viscous_power,
+            conductor_currents=self._conductor_currents(potential),
+        )
 
     def _solve_cold(self, coil_current: complex, frequency: float) -> InductiveSolution:
         omega = 2.0 * np.pi * frequency
@@ -663,40 +685,18 @@ class InductiveField2D:
             viscous_power=viscous,
         )
 
-    def _solution(
-        self,
-        frequency: float,
-        coil_current: complex,
-        potential: np.ndarray,
-        plasma_current: np.ndarray,
-        source: np.ndarray,
-        *,
-        velocity: np.ndarray | None = None,
-        viscous_power: float = 0.0,
+    def solve(
+        self, coil_current: complex = 1.0, *, frequency: float | None = None
     ) -> InductiveSolution:
-        return InductiveSolution(
-            grid=self.grid,
-            frequency=frequency,
-            coil_current=complex(coil_current),
-            vector_potential=potential,
-            plasma_current_density=plasma_current,
-            source_current_density=source.astype(complex),
-            electron_density=self.electron_density,
-            collision_frequency=self.collision_frequency,
-            electron_velocity=velocity,
-            viscous_power=viscous_power,
-            conductor_currents=self._conductor_currents(potential),
-        )
+        """The time-harmonic field for a coil current amplitude [A].
 
-    def _conductor_currents(self, potential: np.ndarray) -> dict[str, Any]:
-        """Net currents of the conductors from Ampere's law, ``(K a) / mu0 = V J``."""
-        residual = (self._curl_curl @ potential.ravel()).reshape(self.grid.shape) / MU_0
-        return {
-            conductor.name or f"conductor {k}": self.grid.net_current(residual, region)
-            for k, (conductor, region) in enumerate(
-                zip(self.conductors, self.conductor_masks, strict=True)
-            )
-        }
+        ``frequency`` overrides the model's (the time-dependent form's modified
+        frequency is the use of it).
+        """
+        frequency = self.frequency if frequency is None else float(frequency)
+        if self.viscosity is None:
+            return self._solve_cold(coil_current, frequency)
+        return self._solve_viscous(coil_current, frequency)
 
     # --- time-dependent ------------------------------------------------------------
 

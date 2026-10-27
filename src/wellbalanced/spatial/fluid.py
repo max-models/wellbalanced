@@ -297,6 +297,147 @@ class Fluid2D:
         wall_potential: The potential of the walls [V].
     """
 
+    def _coarse_fine_stencils(self, faces, inner: np.ndarray, index: np.ndarray):
+        """The coarse values on the faces between levels: their cells and weights.
+
+        Across a face between leaf cells of two levels the coarse value is taken at the
+        face's middle along it (on the line through the finer centre, so the two values
+        of the face are a distance ``delta_low + delta_high`` apart along its normal):
+        quadratic through the coarse cell and its two plasma neighbours of its size
+        along the face, linear where one is missing, the coarse value where both are
+        (patchwork's :class:`~patchwork.CellOperator` interpolates alike). ``None`` on
+        one level; else the faces (among the interior ones), whether their ``low`` cell
+        is the coarse one, and the cells and weights, ``(m, 3)`` each.
+        """
+        if faces.coarse_side is None:
+            return None
+        side = faces.coarse_side[inner]
+        chosen = np.flatnonzero(side >= 0)
+        if not chosen.size:
+            return None
+        low_coarse = side[chosen] == 0
+        coarse = np.where(low_coarse, self._low[chosen], self._high[chosen])
+        delta = faces.coarse_offset[inner][chosen]
+        on_grid = faces.coarse_neighbours[inner][chosen]
+        neighbours = np.where(on_grid >= 0, index[np.maximum(on_grid, 0)], -1)
+        has_below, has_above = neighbours[:, 0] >= 0, neighbours[:, 1] >= 0
+        both = has_below & has_above
+        only_below = has_below & ~has_above
+        only_above = has_above & ~has_below
+        weights = np.zeros((chosen.size, 3))
+        weights[:, 0] = 1.0
+        weights[both, 0] = 1.0 - delta[both] ** 2
+        weights[both, 1] = 0.5 * delta[both] * (delta[both] - 1.0)
+        weights[both, 2] = 0.5 * delta[both] * (delta[both] + 1.0)
+        weights[only_below, 0] = 1.0 + delta[only_below]
+        weights[only_below, 1] = -delta[only_below]
+        weights[only_above, 0] = 1.0 - delta[only_above]
+        weights[only_above, 2] = delta[only_above]
+        cells = np.stack(
+            [
+                coarse,
+                np.where(has_below, neighbours[:, 0], coarse),
+                np.where(has_above, neighbours[:, 1], coarse),
+            ],
+            axis=1,
+        )
+        return chosen, low_coarse, cells, weights
+
+    # --- geometry ------------------------------------------------------------------
+
+    def _faces(self, grid: CellGrid | PatchGrid) -> None:
+        """The interior faces of the plasma and its walls, in plasma-cell indices."""
+        faces = grid.transport_faces()
+        index = np.full(grid.size, -1)
+        index[self.cells] = np.arange(self.size)
+        low, high = index[faces.low], index[faces.high]
+        inner = (low >= 0) & (high >= 0)
+        self._low, self._high = low[inner], high[inner]
+        self._axis = faces.axis[inner]
+        self._area = faces.area[inner]
+        self._delta_low = faces.delta_low[inner]
+        self._delta_high = faces.delta_high[inner]
+        self._distance = self._delta_low + self._delta_high
+        # walls: faces to a cell outside the plasma, and the domain's edges
+        to_high = (low >= 0) & (high < 0)  # the wall is above the plasma cell
+        to_low = (low < 0) & (high >= 0)
+        edge = index[faces.boundary_cell]
+        edge_wall = (edge >= 0) & ~faces.boundary_symmetry
+        self._wall_cell = np.concatenate([low[to_high], high[to_low], edge[edge_wall]])
+        self._wall_axis = np.concatenate(
+            [faces.axis[to_high], faces.axis[to_low], faces.boundary_axis[edge_wall]]
+        )
+        self._wall_sign = np.concatenate(
+            [
+                np.ones(np.count_nonzero(to_high)),
+                -np.ones(np.count_nonzero(to_low)),
+                np.where(faces.boundary_side[edge_wall] == 1, 1.0, -1.0),
+            ]
+        )
+        self._wall_area = np.concatenate(
+            [faces.area[to_high], faces.area[to_low], faces.boundary_area[edge_wall]]
+        )
+        self._wall_delta = np.concatenate(
+            [
+                faces.delta_low[to_high],
+                faces.delta_high[to_low],
+                faces.boundary_delta[edge_wall],
+            ]
+        )
+        self._coarse_fine = self._coarse_fine_stencils(faces, inner, index)
+        spacing = np.concatenate([self._distance, 2.0 * self._wall_delta])
+        self._length_scale = float(np.min(spacing)) if spacing.size else 1.0
+        n = self.size
+        # the weights of the cell gradients: the areas of a cell's faces per axis
+        self._gradient_weight = []
+        for axis in (0, 1):
+            along = np.where(self._axis == axis, self._area, 0.0)
+            total = np.bincount(self._low, along, n) + np.bincount(self._high, along, n)
+            self._gradient_weight.append(
+                np.where(total > 0.0, 1.0 / np.where(total > 0, total, 1.0), 0.0)
+            )
+
+    def _on_cells(self, value: CellField) -> np.ndarray:
+        """A cell field (or an array over the plasma cells) on the plasma cells."""
+        if not callable(value):
+            array = np.asarray(value)
+            if array.shape == (self.size,) and self.size != self.grid.size:
+                return array.astype(float)
+        return self.grid.cell_field(value).ravel()[self.cells]
+
+    def _colouring(self) -> np.ndarray:
+        """A colouring of the cells in which no two of one colour share a neighbour.
+
+        A cell's residual depends on its neighbours across faces (and, across a face
+        between levels, on the cells the coarse value is interpolated from), so
+        perturbing all cells of one colour at once gives separate columns of the
+        Jacobian.
+        """
+        n = self.size
+        rows, cols = [self._low], [self._high]
+        if self._coarse_fine is not None:
+            # a face between levels couples its cells to the interpolation's cells
+            faces, _, cells, _ = self._coarse_fine
+            for k in range(cells.shape[1]):
+                rows += [self._low[faces], self._high[faces]]
+                cols += [cells[:, k], cells[:, k]]
+        rows_all, cols_all = np.concatenate(rows), np.concatenate(cols)
+        ones = np.ones(rows_all.size)
+        adjacency = sp.coo_matrix((ones, (rows_all, cols_all)), shape=(n, n))
+        adjacency = (adjacency + adjacency.T + sp.identity(n)).tocsr()
+        adjacency.data[:] = 1.0
+        square = (adjacency @ adjacency).tocsr()
+        colours = np.full(n, -1)
+        for cell in range(n):
+            neighbours = square.indices[square.indptr[cell] : square.indptr[cell + 1]]
+            used = set(colours[neighbours].tolist())
+            colour = 0
+            while colour in used:
+                colour += 1
+            colours[cell] = colour
+        self._adjacency = adjacency.tocoo()
+        return colours
+
     def __init__(
         self,
         grid: CellGrid | PatchGrid,
@@ -422,106 +563,6 @@ class Fluid2D:
         self._rate_cache: dict[bytes, list[np.ndarray]] = {}
         self._iterations = 0
 
-    # --- geometry ------------------------------------------------------------------
-
-    def _faces(self, grid: CellGrid | PatchGrid) -> None:
-        """The interior faces of the plasma and its walls, in plasma-cell indices."""
-        faces = grid.transport_faces()
-        index = np.full(grid.size, -1)
-        index[self.cells] = np.arange(self.size)
-        low, high = index[faces.low], index[faces.high]
-        inner = (low >= 0) & (high >= 0)
-        self._low, self._high = low[inner], high[inner]
-        self._axis = faces.axis[inner]
-        self._area = faces.area[inner]
-        self._delta_low = faces.delta_low[inner]
-        self._delta_high = faces.delta_high[inner]
-        self._distance = self._delta_low + self._delta_high
-        # walls: faces to a cell outside the plasma, and the domain's edges
-        to_high = (low >= 0) & (high < 0)  # the wall is above the plasma cell
-        to_low = (low < 0) & (high >= 0)
-        edge = index[faces.boundary_cell]
-        edge_wall = (edge >= 0) & ~faces.boundary_symmetry
-        self._wall_cell = np.concatenate([low[to_high], high[to_low], edge[edge_wall]])
-        self._wall_axis = np.concatenate(
-            [faces.axis[to_high], faces.axis[to_low], faces.boundary_axis[edge_wall]]
-        )
-        self._wall_sign = np.concatenate(
-            [
-                np.ones(np.count_nonzero(to_high)),
-                -np.ones(np.count_nonzero(to_low)),
-                np.where(faces.boundary_side[edge_wall] == 1, 1.0, -1.0),
-            ]
-        )
-        self._wall_area = np.concatenate(
-            [faces.area[to_high], faces.area[to_low], faces.boundary_area[edge_wall]]
-        )
-        self._wall_delta = np.concatenate(
-            [
-                faces.delta_low[to_high],
-                faces.delta_high[to_low],
-                faces.boundary_delta[edge_wall],
-            ]
-        )
-        self._coarse_fine = self._coarse_fine_stencils(faces, inner, index)
-        spacing = np.concatenate([self._distance, 2.0 * self._wall_delta])
-        self._length_scale = float(np.min(spacing)) if spacing.size else 1.0
-        n = self.size
-        # the weights of the cell gradients: the areas of a cell's faces per axis
-        self._gradient_weight = []
-        for axis in (0, 1):
-            along = np.where(self._axis == axis, self._area, 0.0)
-            total = np.bincount(self._low, along, n) + np.bincount(self._high, along, n)
-            self._gradient_weight.append(
-                np.where(total > 0.0, 1.0 / np.where(total > 0, total, 1.0), 0.0)
-            )
-
-    def _coarse_fine_stencils(self, faces, inner: np.ndarray, index: np.ndarray):
-        """The coarse values on the faces between levels: their cells and weights.
-
-        Across a face between leaf cells of two levels the coarse value is taken at the
-        face's middle along it (on the line through the finer centre, so the two values
-        of the face are a distance ``delta_low + delta_high`` apart along its normal):
-        quadratic through the coarse cell and its two plasma neighbours of its size
-        along the face, linear where one is missing, the coarse value where both are
-        (patchwork's :class:`~patchwork.CellOperator` interpolates alike). ``None`` on
-        one level; else the faces (among the interior ones), whether their ``low`` cell
-        is the coarse one, and the cells and weights, ``(m, 3)`` each.
-        """
-        if faces.coarse_side is None:
-            return None
-        side = faces.coarse_side[inner]
-        chosen = np.flatnonzero(side >= 0)
-        if not chosen.size:
-            return None
-        low_coarse = side[chosen] == 0
-        coarse = np.where(low_coarse, self._low[chosen], self._high[chosen])
-        delta = faces.coarse_offset[inner][chosen]
-        on_grid = faces.coarse_neighbours[inner][chosen]
-        neighbours = np.where(on_grid >= 0, index[np.maximum(on_grid, 0)], -1)
-        has_below, has_above = neighbours[:, 0] >= 0, neighbours[:, 1] >= 0
-        both = has_below & has_above
-        only_below = has_below & ~has_above
-        only_above = has_above & ~has_below
-        weights = np.zeros((chosen.size, 3))
-        weights[:, 0] = 1.0
-        weights[both, 0] = 1.0 - delta[both] ** 2
-        weights[both, 1] = 0.5 * delta[both] * (delta[both] - 1.0)
-        weights[both, 2] = 0.5 * delta[both] * (delta[both] + 1.0)
-        weights[only_below, 0] = 1.0 + delta[only_below]
-        weights[only_below, 1] = -delta[only_below]
-        weights[only_above, 0] = 1.0 - delta[only_above]
-        weights[only_above, 2] = delta[only_above]
-        cells = np.stack(
-            [
-                coarse,
-                np.where(has_below, neighbours[:, 0], coarse),
-                np.where(has_above, neighbours[:, 1], coarse),
-            ],
-            axis=1,
-        )
-        return chosen, low_coarse, cells, weights
-
     def _sides(
         self, values: np.ndarray, positive: bool = False
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -544,52 +585,21 @@ class Fluid2D:
         high[faces[~low_coarse]] = value[~low_coarse]
         return low, high
 
-    def _on_cells(self, value: CellField) -> np.ndarray:
-        """A cell field (or an array over the plasma cells) on the plasma cells."""
-        if not callable(value):
-            array = np.asarray(value)
-            if array.shape == (self.size,) and self.size != self.grid.size:
-                return array.astype(float)
-        return self.grid.cell_field(value).ravel()[self.cells]
-
     def on_grid(self, values: np.ndarray, outside: float = 0.0) -> np.ndarray:
         """Values on the plasma cells as a field over the grid, ``outside`` elsewhere."""
         result = np.full(self.grid.size, outside, dtype=np.asarray(values).dtype)
         result[self.cells] = values
         return result.reshape(self.grid.shape)
 
-    def _colouring(self) -> np.ndarray:
-        """A colouring of the cells in which no two of one colour share a neighbour.
-
-        A cell's residual depends on its neighbours across faces (and, across a face
-        between levels, on the cells the coarse value is interpolated from), so
-        perturbing all cells of one colour at once gives separate columns of the
-        Jacobian.
-        """
-        n = self.size
-        rows, cols = [self._low], [self._high]
-        if self._coarse_fine is not None:
-            # a face between levels couples its cells to the interpolation's cells
-            faces, _, cells, _ = self._coarse_fine
-            for k in range(cells.shape[1]):
-                rows += [self._low[faces], self._high[faces]]
-                cols += [cells[:, k], cells[:, k]]
-        rows_all, cols_all = np.concatenate(rows), np.concatenate(cols)
-        ones = np.ones(rows_all.size)
-        adjacency = sp.coo_matrix((ones, (rows_all, cols_all)), shape=(n, n))
-        adjacency = (adjacency + adjacency.T + sp.identity(n)).tocsr()
-        adjacency.data[:] = 1.0
-        square = (adjacency @ adjacency).tocsr()
-        colours = np.full(n, -1)
-        for cell in range(n):
-            neighbours = square.indices[square.indptr[cell] : square.indptr[cell + 1]]
-            used = set(colours[neighbours].tolist())
-            colour = 0
-            while colour in used:
-                colour += 1
-            colours[cell] = colour
-        self._adjacency = adjacency.tocoo()
-        return colours
+    def _electrons(self, densities: Mapping[str, np.ndarray]) -> np.ndarray:
+        if self.closure == "poisson":
+            return densities["e"]
+        charge = sum(
+            s.species.charge * densities[s.name]
+            for s in self.species
+            if s.name != "e" and s.species.charge != 0
+        )
+        return np.maximum(charge, NE_FLOOR)
 
     # --- the unknowns ----------------------------------------------------------------
 
@@ -621,16 +631,6 @@ class Fluid2D:
             u[:, self._energy_column] = np.log(1.5 * ne * np.maximum(te, TE_FLOOR))
         u[:, -1] = self._on_cells(potential)
         return u.ravel()
-
-    def _electrons(self, densities: Mapping[str, np.ndarray]) -> np.ndarray:
-        if self.closure == "poisson":
-            return densities["e"]
-        charge = sum(
-            s.species.charge * densities[s.name]
-            for s in self.species
-            if s.name != "e" and s.species.charge != 0
-        )
-        return np.maximum(charge, NE_FLOOR)
 
     def _unpack(self, unknowns: np.ndarray):
         u = unknowns.reshape(self.size, self._nvar)
@@ -713,74 +713,6 @@ class Fluid2D:
             result.append(total * self._gradient_weight[axis])
         return result[0], result[1]
 
-    # --- fluxes ------------------------------------------------------------------------
-
-    def _transport(self, densities, velocities, te, phi):
-        """Fluxes on the interior faces (low to high) and out through the walls.
-
-        Returns ``(interior, walls, fields, momentum)``: fluxes by species and
-        ``"energy"``; the fields ``E`` (interior, along the face's axis) and ``E_out``
-        (walls); and the ions' momentum fluxes by species, ``(interior, walls)`` per
-        component.
-        """
-        distance = self._distance
-        wc = self._wall_cell
-        phi_low, phi_high = self._sides(phi)
-        efield = -(phi_high - phi_low) / distance
-        sheath = phi[wc] - self.wall_potential  # the drop to the wall
-        e_out = sheath / self._wall_delta
-        force = self._face_force()
-        interior: dict[str, np.ndarray] = {}
-        walls: dict[str, np.ndarray] = {}
-        momentum: dict[str, Any] = {}
-        for fluid in self.species:
-            name, z = fluid.name, fluid.species.charge
-            n = densities[name]
-            if name in velocities:
-                interior[name], walls[name], momentum[name] = self._ion_fluxes(
-                    fluid, n, velocities[name], te
-                )
-                continue
-            mu_cell = self._mobility(fluid, densities, te)
-            t_cell = self._temperature(fluid, te)
-            mu = 0.5 * np.add(*self._sides(mu_cell, positive=True))
-            if fluid.diffusion is not None:
-                d = np.full(distance.size, fluid.diffusion)
-            else:
-                d = mu * 0.5 * np.add(*self._sides(t_cell, positive=True))
-            field, field_out = efield, e_out
-            if name == "e":  # the force acts as the field -F/e on the electrons
-                field = efield - force[0] / E
-                field_out = e_out - force[1] / E
-            interior[name] = scharfetter_gummel(
-                z, mu, d, field, *self._sides(n, positive=True), distance
-            )
-            walls[name] = self._wall_flux(
-                fluid, n[wc], t_cell[wc], mu_cell[wc], field_out, sheath, te[wc]
-            )
-            if name == "e" and self._energy:
-                w = 1.5 * n * te
-                interior["energy"] = scharfetter_gummel(
-                    z,
-                    5 / 3 * mu,
-                    5 / 3 * d,
-                    field,
-                    *self._sides(w, positive=True),
-                    distance,
-                )
-                walls["energy"] = self._wall_flux(
-                    fluid,
-                    w[wc],
-                    t_cell[wc],
-                    mu_cell[wc],
-                    field_out,
-                    sheath,
-                    te[wc],
-                    energy=True,
-                    particles=walls["e"],
-                )
-        return interior, walls, (efield, e_out), momentum
-
     def _ion_fluxes(self, fluid: FluidSpecies, n, velocity, te):
         """Rusanov fluxes of an ion's mass and momentum, and its Bohm outflow."""
         axis = self._axis
@@ -855,6 +787,74 @@ class Fluid2D:
             self._wall_axis == 0, components[0][wc], components[1][wc]
         )
         return along, out
+
+    # --- fluxes ------------------------------------------------------------------------
+
+    def _transport(self, densities, velocities, te, phi):
+        """Fluxes on the interior faces (low to high) and out through the walls.
+
+        Returns ``(interior, walls, fields, momentum)``: fluxes by species and
+        ``"energy"``; the fields ``E`` (interior, along the face's axis) and ``E_out``
+        (walls); and the ions' momentum fluxes by species, ``(interior, walls)`` per
+        component.
+        """
+        distance = self._distance
+        wc = self._wall_cell
+        phi_low, phi_high = self._sides(phi)
+        efield = -(phi_high - phi_low) / distance
+        sheath = phi[wc] - self.wall_potential  # the drop to the wall
+        e_out = sheath / self._wall_delta
+        force = self._face_force()
+        interior: dict[str, np.ndarray] = {}
+        walls: dict[str, np.ndarray] = {}
+        momentum: dict[str, Any] = {}
+        for fluid in self.species:
+            name, z = fluid.name, fluid.species.charge
+            n = densities[name]
+            if name in velocities:
+                interior[name], walls[name], momentum[name] = self._ion_fluxes(
+                    fluid, n, velocities[name], te
+                )
+                continue
+            mu_cell = self._mobility(fluid, densities, te)
+            t_cell = self._temperature(fluid, te)
+            mu = 0.5 * np.add(*self._sides(mu_cell, positive=True))
+            if fluid.diffusion is not None:
+                d = np.full(distance.size, fluid.diffusion)
+            else:
+                d = mu * 0.5 * np.add(*self._sides(t_cell, positive=True))
+            field, field_out = efield, e_out
+            if name == "e":  # the force acts as the field -F/e on the electrons
+                field = efield - force[0] / E
+                field_out = e_out - force[1] / E
+            interior[name] = scharfetter_gummel(
+                z, mu, d, field, *self._sides(n, positive=True), distance
+            )
+            walls[name] = self._wall_flux(
+                fluid, n[wc], t_cell[wc], mu_cell[wc], field_out, sheath, te[wc]
+            )
+            if name == "e" and self._energy:
+                w = 1.5 * n * te
+                interior["energy"] = scharfetter_gummel(
+                    z,
+                    5 / 3 * mu,
+                    5 / 3 * d,
+                    field,
+                    *self._sides(w, positive=True),
+                    distance,
+                )
+                walls["energy"] = self._wall_flux(
+                    fluid,
+                    w[wc],
+                    t_cell[wc],
+                    mu_cell[wc],
+                    field_out,
+                    sheath,
+                    te[wc],
+                    energy=True,
+                    particles=walls["e"],
+                )
+        return interior, walls, (efield, e_out), momentum
 
     def _divergence(self, interior: np.ndarray, walls: np.ndarray) -> np.ndarray:
         """``div Gamma`` on the cells, from the face fluxes (one per face)."""
@@ -1024,6 +1024,42 @@ class Fluid2D:
             shape=(size, size),
         )
 
+    def _damping(self, u: np.ndarray, delta: np.ndarray, is_log: np.ndarray) -> float:
+        """The fraction of a Newton step to take.
+
+        A logarithm changes by at most :data:`MAX_LOG_STEP`, the potential by at most
+        :data:`MAX_POTENTIAL_STEP` times the largest ``T_e`` and an ion velocity by at
+        most :data:`MAX_VELOCITY_STEP` times the largest Bohm speed.
+        """
+        fraction = 1.0
+        largest = float(np.max(np.abs(delta[is_log])))
+        if largest > MAX_LOG_STEP:
+            fraction = MAX_LOG_STEP / largest
+        _, _, te, _ = self._unpack(u)
+        t_max = float(np.max(te))
+        steps = delta.reshape(self.size, self._nvar)
+        potential = float(np.max(np.abs(steps[:, -1])))
+        if potential > MAX_POTENTIAL_STEP * t_max:
+            fraction = min(fraction, MAX_POTENTIAL_STEP * t_max / potential)
+        for name, columns in self._velocity_columns.items():
+            mass = self._by_name[name].species.mass
+            bohm = np.sqrt(E * t_max / mass)
+            velocity = float(np.max(np.abs(steps[:, list(columns)])))
+            if velocity > MAX_VELOCITY_STEP * bohm:
+                fraction = min(fraction, MAX_VELOCITY_STEP * bohm / velocity)
+        return fraction
+
+    @staticmethod
+    def _factorized(matrix: sp.csc_matrix):
+        """The sparse LU of a Jacobian, or ``None`` if it is singular or not finite."""
+        matrix = sp.csc_matrix(matrix)
+        if not np.all(np.isfinite(matrix.data)):
+            return None
+        try:
+            return spla.splu(matrix)
+        except RuntimeError:
+            return None
+
     @profile("wellbalanced.Fluid2D.newton", tags=_PROFILE_TAGS)
     def _newton(self, unknowns, previous, dt, max_iterations: int | None = None):
         """Solve the (backward Euler or steady) equations; return the solution and success.
@@ -1066,42 +1102,6 @@ class Fluid2D:
             ):
                 return u, True
         return u, False
-
-    def _damping(self, u: np.ndarray, delta: np.ndarray, is_log: np.ndarray) -> float:
-        """The fraction of a Newton step to take.
-
-        A logarithm changes by at most :data:`MAX_LOG_STEP`, the potential by at most
-        :data:`MAX_POTENTIAL_STEP` times the largest ``T_e`` and an ion velocity by at
-        most :data:`MAX_VELOCITY_STEP` times the largest Bohm speed.
-        """
-        fraction = 1.0
-        largest = float(np.max(np.abs(delta[is_log])))
-        if largest > MAX_LOG_STEP:
-            fraction = MAX_LOG_STEP / largest
-        _, _, te, _ = self._unpack(u)
-        t_max = float(np.max(te))
-        steps = delta.reshape(self.size, self._nvar)
-        potential = float(np.max(np.abs(steps[:, -1])))
-        if potential > MAX_POTENTIAL_STEP * t_max:
-            fraction = min(fraction, MAX_POTENTIAL_STEP * t_max / potential)
-        for name, columns in self._velocity_columns.items():
-            mass = self._by_name[name].species.mass
-            bohm = np.sqrt(E * t_max / mass)
-            velocity = float(np.max(np.abs(steps[:, list(columns)])))
-            if velocity > MAX_VELOCITY_STEP * bohm:
-                fraction = min(fraction, MAX_VELOCITY_STEP * bohm / velocity)
-        return fraction
-
-    @staticmethod
-    def _factorized(matrix: sp.csc_matrix):
-        """The sparse LU of a Jacobian, or ``None`` if it is singular or not finite."""
-        matrix = sp.csc_matrix(matrix)
-        if not np.all(np.isfinite(matrix.data)):
-            return None
-        try:
-            return spla.splu(matrix)
-        except RuntimeError:
-            return None
 
     # --- running -----------------------------------------------------------------------
 

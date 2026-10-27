@@ -622,6 +622,12 @@ class GlobalModel:
             )
         return result
 
+    def _scale(self, state: np.ndarray) -> float:
+        """The fastest relative gain or loss (1/s) of any unknown, to judge a residual."""
+        terms = self._terms(state)
+        n, gross = terms["densities"], terms["gross"]
+        return max([gross[name] / n[name] for name in self._unknown] + [1.0])
+
     # -- solving ----------------------------------------------------------------------
 
     @profile("wellbalanced.GlobalModel.steady_state", tags=_PROFILE_TAGS)
@@ -709,12 +715,6 @@ class GlobalModel:
                     states.append(self.evaluate(column, t=float(t)))
             y = run.y[:, -1]
         return states
-
-    def _scale(self, state: np.ndarray) -> float:
-        """The fastest relative gain or loss (1/s) of any unknown, to judge a residual."""
-        terms = self._terms(state)
-        n, gross = terms["densities"], terms["gross"]
-        return max([gross[name] / n[name] for name in self._unknown] + [1.0])
 
     def plasma_potential(self, state: GlobalState) -> float:
         """The plasma's potential over the floating walls (V): presheath plus sheath.

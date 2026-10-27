@@ -300,6 +300,20 @@ class CellGrid:
             result |= self.mask(shape)
         return result
 
+    def _metric(self, axis: int, face: float | None, distance: float, left, right):
+        """``c`` and the weights ``(w_-, w_+)`` of the faces between two cell planes."""
+        dx, dy = np.diff(self.x_edges), np.diff(self.y_edges)
+        ones = np.ones(left.shape)
+        if not self.cylindrical:
+            length = dy if axis == 0 else dx
+            return length / distance, ones, ones
+        if axis == 1:  # axial faces at the cells' radius
+            return 2.0 * np.pi * self.x * dx / distance, ones, ones
+        # radial faces: the curl is (1 / r) d(r a) / dr
+        r_left, r_right = self.x[left // self.shape[1]], self.x[right // self.shape[1]]
+        assert face is not None  # the radius is never periodic
+        return 2.0 * np.pi * dy / (face * distance), r_left, r_right
+
     # --- operators ----------------------------------------------------------------
 
     def _faces(self, axis: int):
@@ -323,20 +337,6 @@ class CellGrid:
             (left, right, *self._metric(axis, face, distance, left, right))
             for left, right, face, distance in planes
         ]
-
-    def _metric(self, axis: int, face: float | None, distance: float, left, right):
-        """``c`` and the weights ``(w_-, w_+)`` of the faces between two cell planes."""
-        dx, dy = np.diff(self.x_edges), np.diff(self.y_edges)
-        ones = np.ones(left.shape)
-        if not self.cylindrical:
-            length = dy if axis == 0 else dx
-            return length / distance, ones, ones
-        if axis == 1:  # axial faces at the cells' radius
-            return 2.0 * np.pi * self.x * dx / distance, ones, ones
-        # radial faces: the curl is (1 / r) d(r a) / dr
-        r_left, r_right = self.x[left // self.shape[1]], self.x[right // self.shape[1]]
-        assert face is not None  # the radius is never periodic
-        return 2.0 * np.pi * dy / (face * distance), r_left, r_right
 
     @property
     def on_axis(self) -> bool:
@@ -373,6 +373,19 @@ class CellGrid:
                 c = 2.0 * np.pi * dy / (edge * distance)
                 result.append((cells, c, np.full(cells.shape, centre)))
         return result
+
+    def _half_metric(self, axis: int, cells, side: int, centres, edges) -> np.ndarray:
+        """``c`` of the face of ``cells`` toward their neighbour on ``side`` (0: +)."""
+        i, j = np.divmod(cells, self.shape[1])
+        k = (i, j)[axis]
+        face = edges[k + 1] if side == 0 else edges[k]
+        distance = np.abs(face - centres[k])
+        dx, dy = np.diff(self.x_edges), np.diff(self.y_edges)
+        if not self.cylindrical:
+            return (dy[j] if axis == 0 else dx[i]) / distance
+        if axis == 1:
+            return 2.0 * np.pi * self.x[i] * dx[i] / distance
+        return 2.0 * np.pi * dy[j] / (face * distance)
 
     def curl_curl(
         self,
@@ -448,19 +461,6 @@ class CellGrid:
             else sp.coo_matrix((self.size, self.size))
         )
         return (matrix + sp.diags(diagonal)).tocsr()
-
-    def _half_metric(self, axis: int, cells, side: int, centres, edges) -> np.ndarray:
-        """``c`` of the face of ``cells`` toward their neighbour on ``side`` (0: +)."""
-        i, j = np.divmod(cells, self.shape[1])
-        k = (i, j)[axis]
-        face = edges[k + 1] if side == 0 else edges[k]
-        distance = np.abs(face - centres[k])
-        dx, dy = np.diff(self.x_edges), np.diff(self.y_edges)
-        if not self.cylindrical:
-            return (dy[j] if axis == 0 else dx[i]) / distance
-        if axis == 1:
-            return 2.0 * np.pi * self.x[i] * dx[i] / distance
-        return 2.0 * np.pi * dy[j] / (face * distance)
 
     def curl(self, a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """The in-plane curl of the normal field ``a`` on the cell centres.

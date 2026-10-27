@@ -431,6 +431,10 @@ def test_the_driver_gas_depletes_and_heats_in_the_plasma(driver_models) -> None:
     assert t_h > t_h2 > 1.5 * TW
 
 
+def driver_length(gas: NeutralFluid2D) -> float:
+    return float(gas.grid.y_edges[-1])
+
+
 def test_the_plasma_and_the_gas_reach_a_common_steady_state(driver_models) -> None:
     """The coupled passes converge; the nuclei fed leave through the grid."""
     plasma, start, gas, fill, feed = driver_models
@@ -456,10 +460,6 @@ def test_the_plasma_and_the_gas_reach_a_common_steady_state(driver_models) -> No
     assert neutrals_out + ions_out == pytest.approx(2 * feed, rel=0.05)
     assert ions.converged and state.converged
     assert ions.mean(ions.electron_density) > 1e17
-
-
-def driver_length(gas: NeutralFluid2D) -> float:
-    return float(gas.grid.y_edges[-1])
 
 
 def test_bad_models_are_refused(column) -> None:

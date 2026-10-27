@@ -735,6 +735,20 @@ class Fluid1D:
                 fluxes["energy"] = energy
         return fluxes, efield
 
+    def _source_rates(self, n_all, te) -> list[np.ndarray]:
+        """The volume rate of every volume source on the cells (m^-3 s^-1)."""
+        out = []
+        for source in self.volume_sources:
+            if callable(source.rate):
+                coefficient = source.rate(te, self.gas_temperature)  # type: ignore[arg-type]
+            else:
+                coefficient = source.rate
+            rate = np.broadcast_to(np.asarray(coefficient, dtype=float), (self.cells,))
+            for name in source.per:
+                rate = rate * n_all[name]
+            out.append(np.asarray(rate, dtype=float))
+        return out
+
     # -- the equations --------------------------------------------------------------
 
     def _reactions(self, densities, te):
@@ -775,20 +789,6 @@ class Fluid1D:
             loss = loss - source.electron_energy * rate
         return rates, sources, loss, sinks
 
-    def _source_rates(self, n_all, te) -> list[np.ndarray]:
-        """The volume rate of every volume source on the cells (m^-3 s^-1)."""
-        out = []
-        for source in self.volume_sources:
-            if callable(source.rate):
-                coefficient = source.rate(te, self.gas_temperature)  # type: ignore[arg-type]
-            else:
-                coefficient = source.rate
-            rate = np.broadcast_to(np.asarray(coefficient, dtype=float), (self.cells,))
-            for name in source.per:
-                rate = rate * n_all[name]
-            out.append(np.asarray(rate, dtype=float))
-        return out
-
     def _scales(self, unknowns: np.ndarray) -> np.ndarray:
         """Every equation's scale, from the sizes of the fields of ``unknowns``.
 
@@ -810,6 +810,39 @@ class Fluid1D:
                     size * (E / fluid.species.mass) / self.length
                 )
         return scales
+
+    def _momentum_residual(self, fluid, n, flux, efield, sink, old, dt):
+        """The momentum balance on the faces between cells (m^-2 s^-2)."""
+        h = self.h
+        mass = fluid.species.mass
+        tg = self.gas_temperature
+        inner = flux[1:-1]
+        # the electric and pressure force, (e / mu) times the drift-diffusion flux
+        sg = self._sg(
+            fluid.species.charge,
+            np.full(self.cells - 1, fluid.mobility),
+            np.full(self.cells - 1, fluid.mobility * tg),
+            efield[1:-1],
+            n[:-1],
+            n[1:],
+            h,
+        )
+        friction = E / (mass * fluid.mobility)
+        # Gamma^2 / n on the cells, upwind: from the face the flow comes through
+        face = np.concatenate([n[:1], 0.5 * (n[:-1] + n[1:]), n[-1:]])
+        carried = flux**2 / face
+        rightward = flux[:-1] + flux[1:] > 0.0
+        convection = np.where(rightward, carried[:-1], carried[1:])
+        rate = sink / n
+        loss = 0.5 * (rate[:-1] + rate[1:])
+        balance = (
+            (convection[1:] - convection[:-1]) / h
+            - friction * sg
+            + (friction + loss) * inner
+        )
+        if old is not None:
+            balance = balance + (inner - old) / dt
+        return balance
 
     def _residual(
         self,
@@ -870,39 +903,6 @@ class Fluid1D:
         laplacian[:] = (efield[:-1] - efield[1:]) / h  # d^2 phi/dx^2 = -dE/dx
         res[:, -1] = (laplacian + E * charge / EPSILON_0) * h * h
         return res.ravel()
-
-    def _momentum_residual(self, fluid, n, flux, efield, sink, old, dt):
-        """The momentum balance on the faces between cells (m^-2 s^-2)."""
-        h = self.h
-        mass = fluid.species.mass
-        tg = self.gas_temperature
-        inner = flux[1:-1]
-        # the electric and pressure force, (e / mu) times the drift-diffusion flux
-        sg = self._sg(
-            fluid.species.charge,
-            np.full(self.cells - 1, fluid.mobility),
-            np.full(self.cells - 1, fluid.mobility * tg),
-            efield[1:-1],
-            n[:-1],
-            n[1:],
-            h,
-        )
-        friction = E / (mass * fluid.mobility)
-        # Gamma^2 / n on the cells, upwind: from the face the flow comes through
-        face = np.concatenate([n[:1], 0.5 * (n[:-1] + n[1:]), n[-1:]])
-        carried = flux**2 / face
-        rightward = flux[:-1] + flux[1:] > 0.0
-        convection = np.where(rightward, carried[:-1], carried[1:])
-        rate = sink / n
-        loss = 0.5 * (rate[:-1] + rate[1:])
-        balance = (
-            (convection[1:] - convection[:-1]) / h
-            - friction * sg
-            + (friction + loss) * inner
-        )
-        if old is not None:
-            balance = balance + (inner - old) / dt
-        return balance
 
     def _jacobian(
         self, unknowns: np.ndarray, previous, dt, scales: np.ndarray | None = None

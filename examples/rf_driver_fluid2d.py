@@ -94,6 +94,9 @@ WINDINGS = [
 CONDUCTORS = [Conductor([box(0.0, 0.125, -0.04, 0.0)], name="driver backplate")]
 
 
+grid = CellGrid(r_edges, z_edges, geometry="cylindrical")
+
+
 def field(profile: PlasmaProfile) -> InductiveField2D:
     """The r–z field of the coil for a plasma, on the fluid's grid."""
     return InductiveField2D(
@@ -106,7 +109,6 @@ def field(profile: PlasmaProfile) -> InductiveField2D:
     )
 
 
-grid = CellGrid(r_edges, z_edges, geometry="cylindrical")
 species = [FluidSpecies(s, 1.0) for s in driver.species if s.name == "e"] + [
     FluidSpecies(
         s,

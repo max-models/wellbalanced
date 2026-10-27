@@ -49,6 +49,9 @@ def _sides(boundary: Any) -> tuple[SideBoundary, SideBoundary]:
     return pair  # type: ignore[return-value]
 
 
+_CYCLE = ((0, 1, 2), (1, 2, 0), (2, 0, 1))
+
+
 class EdgeGrid:
     """Edges and faces of a uniform Cartesian grid of ``cells[0] x cells[1] x cells[2]``.
 
@@ -59,6 +62,50 @@ class EdgeGrid:
         boundaries: Per axis, one of ``"dirichlet"``, ``"natural"``, ``"periodic"``, or a
             pair ``(lower side, upper side)``; default Dirichlet everywhere.
     """
+
+    def _edge_count(self, axis: int) -> int:
+        return int(np.prod(self.edge_shape(axis)))
+
+    def _face_count(self, axis: int) -> int:
+        return int(np.prod(self.face_shape(axis)))
+
+    def _ends(self, shape: tuple[int, ...], axis: int) -> tuple[np.ndarray, np.ndarray]:
+        """Masks of the first and last node planes along ``axis`` (none if periodic)."""
+        index = np.indices(shape)[axis]
+        if self.periodic[axis]:
+            none = np.zeros(shape, dtype=bool)
+            return none, none
+        return index == 0, index == shape[axis] - 1
+
+    def _halved(self, shape, axis: int, area: float) -> np.ndarray:
+        """Dual-face areas of the edges along ``axis``: halved per boundary plane."""
+        result = np.full(shape, area)
+        for b in range(3):
+            if b == axis:
+                continue
+            first, last = self._ends(shape, b)
+            result[first | last] *= 0.5
+        return result.ravel()
+
+    def _halved_normal(self, axis: int, length: float) -> np.ndarray:
+        shape = self.face_shape(axis)
+        result = np.full(shape, length)
+        first, last = self._ends(shape, axis)
+        result[first | last] *= 0.5
+        return result.ravel()
+
+    def _free(self, axis: int) -> np.ndarray:
+        shape = self.edge_shape(axis)
+        free = np.ones(shape, dtype=bool)
+        for b in range(3):
+            if b == axis:
+                continue
+            first, last = self._ends(shape, b)
+            if self.boundaries[b][0] == "dirichlet":
+                free &= ~first
+            if self.boundaries[b][1] == "dirichlet":
+                free &= ~last
+        return free.ravel()
 
     def __init__(
         self,
@@ -127,50 +174,6 @@ class EdgeGrid:
         return tuple(  # type: ignore[return-value]
             self.nodes[b] if b == axis else self.cells[b] for b in range(3)
         )
-
-    def _edge_count(self, axis: int) -> int:
-        return int(np.prod(self.edge_shape(axis)))
-
-    def _face_count(self, axis: int) -> int:
-        return int(np.prod(self.face_shape(axis)))
-
-    def _ends(self, shape: tuple[int, ...], axis: int) -> tuple[np.ndarray, np.ndarray]:
-        """Masks of the first and last node planes along ``axis`` (none if periodic)."""
-        index = np.indices(shape)[axis]
-        if self.periodic[axis]:
-            none = np.zeros(shape, dtype=bool)
-            return none, none
-        return index == 0, index == shape[axis] - 1
-
-    def _halved(self, shape, axis: int, area: float) -> np.ndarray:
-        """Dual-face areas of the edges along ``axis``: halved per boundary plane."""
-        result = np.full(shape, area)
-        for b in range(3):
-            if b == axis:
-                continue
-            first, last = self._ends(shape, b)
-            result[first | last] *= 0.5
-        return result.ravel()
-
-    def _halved_normal(self, axis: int, length: float) -> np.ndarray:
-        shape = self.face_shape(axis)
-        result = np.full(shape, length)
-        first, last = self._ends(shape, axis)
-        result[first | last] *= 0.5
-        return result.ravel()
-
-    def _free(self, axis: int) -> np.ndarray:
-        shape = self.edge_shape(axis)
-        free = np.ones(shape, dtype=bool)
-        for b in range(3):
-            if b == axis:
-                continue
-            first, last = self._ends(shape, b)
-            if self.boundaries[b][0] == "dirichlet":
-                free &= ~first
-            if self.boundaries[b][1] == "dirichlet":
-                free &= ~last
-        return free.ravel()
 
     # --- positions ---------------------------------------------------------------
 
@@ -376,6 +379,3 @@ class EdgeGrid:
         return values[self.edge_offsets[axis] : self.edge_offsets[axis + 1]].reshape(
             self.edge_shape(axis)
         )
-
-
-_CYCLE = ((0, 1, 2), (1, 2, 0), (2, 0, 1))

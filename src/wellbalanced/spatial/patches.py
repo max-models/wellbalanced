@@ -38,6 +38,45 @@ Box = tuple[tuple[float, float], tuple[float, float]]
 _FACE_NAMES = (("x_lower", "x_upper"), ("y_lower", "y_upper"))
 
 
+def _level_tags(
+    hierarchy: AMRHierarchy,
+    level: int,
+    function: Callable[[np.ndarray, np.ndarray, int], Any],
+) -> np.ndarray:
+    """``function`` on the cell centres of a whole level, as tags of that level."""
+    dx, dy = hierarchy.spacing(level)
+    (x0, _), (y0, _) = hierarchy.bounds
+    nx, ny = hierarchy.level_shape(level)
+    xx, yy = np.meshgrid(
+        x0 + (np.arange(nx) + 0.5) * dx, y0 + (np.arange(ny) + 0.5) * dy, indexing="ij"
+    )
+    return np.broadcast_to(np.asarray(function(xx, yy, level), dtype=bool), (nx, ny))
+
+
+def _min_overlapping(
+    edges: np.ndarray, lower: np.ndarray, upper: np.ndarray
+) -> np.ndarray:
+    """The smallest spacing of the cells of ``edges`` each interval overlaps."""
+    spacing = np.diff(edges)
+    first = np.clip(
+        np.searchsorted(edges, lower, side="right") - 1, 0, spacing.size - 1
+    )
+    last = np.clip(np.searchsorted(edges, upper, side="left"), first + 1, spacing.size)
+    # the minimum over spacing[first:last] for every interval (a sparse table)
+    table = [spacing]
+    while 2 ** len(table) <= spacing.size:
+        previous, step = table[-1], 2 ** (len(table) - 1)
+        table.append(np.minimum(previous[:-step], previous[step:]))
+    width = last - first
+    power = np.floor(np.log2(width)).astype(int)
+    result = np.empty(lower.shape)
+    for k in np.unique(power):
+        mine = power == k
+        start, stop = first[mine], last[mine] - 2**k
+        result[mine] = np.minimum(table[k][start], table[k][stop])
+    return result
+
+
 class PatchGrid:
     """The leaf cells of a patch hierarchy, in a cut or in r–z.
 
@@ -397,6 +436,52 @@ class PatchGrid:
             result[edge[inside[edge]]] = True
         return result & inside
 
+    def _coarse_fine(
+        self,
+        axis: int,
+        low: np.ndarray,
+        high: np.ndarray,
+        start: np.ndarray,
+        count: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The coarser cell of faces between levels, its neighbours and the offset.
+
+        As :class:`TransportFaces` has them: ``coarse_side``, ``coarse_neighbours``
+        (the leaf cells of the coarser one's size next to it along the face, on the
+        finest lattice; periodic axes wrap) and ``coarse_offset``.
+        """
+        cells = self.cells
+        span_low, span_high = cells.span[low], cells.span[high]
+        side = np.where(
+            span_low > span_high, 0, np.where(span_high > span_low, 1, -1)
+        ).astype(int)
+        neighbours = np.full((low.size, 2), -1, dtype=int)
+        offset = np.zeros(low.size)
+        mixed = np.flatnonzero(side >= 0)
+        if not mixed.size:
+            return side, neighbours, offset
+        coarse = np.where(side[mixed] == 0, low[mixed], high[mixed])
+        other = 1 - axis
+        span = cells.span[coarse]
+        lattice = cells.lattice[coarse]
+        middle = start[mixed] + 0.5 * count[mixed]
+        offset[mixed] = (middle - (lattice[:, other] + 0.5 * span)) / span
+        size = cells.owner.shape[other]
+        for column, sign in enumerate((-1, 1)):
+            spot = lattice.copy()
+            spot[:, other] += sign * span
+            if self.hierarchy.periodic[other]:
+                spot[:, other] %= size
+            inside = (spot[:, other] >= 0) & (spot[:, other] < size)
+            found = np.full(coarse.size, -1, dtype=int)
+            found[inside] = cells.owner[tuple(spot[inside].T)]
+            valid = found >= 0
+            valid[valid] &= (cells.span[found[valid]] == span[valid]) & np.all(
+                cells.lattice[found[valid]] == spot[valid], axis=1
+            )
+            neighbours[mixed, column] = np.where(valid, found, -1)
+        return side, neighbours, offset
+
     def transport_faces(self) -> TransportFaces:
         """The faces of the leaf cells for finite-volume transport, across levels too.
 
@@ -455,52 +540,6 @@ class PatchGrid:
             )
         return TransportFaces.concatenate(interior, boundary)
 
-    def _coarse_fine(
-        self,
-        axis: int,
-        low: np.ndarray,
-        high: np.ndarray,
-        start: np.ndarray,
-        count: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """The coarser cell of faces between levels, its neighbours and the offset.
-
-        As :class:`TransportFaces` has them: ``coarse_side``, ``coarse_neighbours``
-        (the leaf cells of the coarser one's size next to it along the face, on the
-        finest lattice; periodic axes wrap) and ``coarse_offset``.
-        """
-        cells = self.cells
-        span_low, span_high = cells.span[low], cells.span[high]
-        side = np.where(
-            span_low > span_high, 0, np.where(span_high > span_low, 1, -1)
-        ).astype(int)
-        neighbours = np.full((low.size, 2), -1, dtype=int)
-        offset = np.zeros(low.size)
-        mixed = np.flatnonzero(side >= 0)
-        if not mixed.size:
-            return side, neighbours, offset
-        coarse = np.where(side[mixed] == 0, low[mixed], high[mixed])
-        other = 1 - axis
-        span = cells.span[coarse]
-        lattice = cells.lattice[coarse]
-        middle = start[mixed] + 0.5 * count[mixed]
-        offset[mixed] = (middle - (lattice[:, other] + 0.5 * span)) / span
-        size = cells.owner.shape[other]
-        for column, sign in enumerate((-1, 1)):
-            spot = lattice.copy()
-            spot[:, other] += sign * span
-            if self.hierarchy.periodic[other]:
-                spot[:, other] %= size
-            inside = (spot[:, other] >= 0) & (spot[:, other] < size)
-            found = np.full(coarse.size, -1, dtype=int)
-            found[inside] = cells.owner[tuple(spot[inside].T)]
-            valid = found >= 0
-            valid[valid] &= (cells.span[found[valid]] == span[valid]) & np.all(
-                cells.lattice[found[valid]] == spot[valid], axis=1
-            )
-            neighbours[mixed, column] = np.where(valid, found, -1)
-        return side, neighbours, offset
-
     def locate(self, x: float, y: float) -> int:
         """The leaf cell containing the point ``(x, y)`` (-1 outside the domain)."""
         return int(self.cells.locate(np.array([[x], [y]], dtype=float))[0])
@@ -512,42 +551,3 @@ class PatchGrid:
             first: ("cell", self.x, {"long_name": first, "units": "m"}),
             second: ("cell", self.y, {"long_name": second, "units": "m"}),
         }
-
-
-def _level_tags(
-    hierarchy: AMRHierarchy,
-    level: int,
-    function: Callable[[np.ndarray, np.ndarray, int], Any],
-) -> np.ndarray:
-    """``function`` on the cell centres of a whole level, as tags of that level."""
-    dx, dy = hierarchy.spacing(level)
-    (x0, _), (y0, _) = hierarchy.bounds
-    nx, ny = hierarchy.level_shape(level)
-    xx, yy = np.meshgrid(
-        x0 + (np.arange(nx) + 0.5) * dx, y0 + (np.arange(ny) + 0.5) * dy, indexing="ij"
-    )
-    return np.broadcast_to(np.asarray(function(xx, yy, level), dtype=bool), (nx, ny))
-
-
-def _min_overlapping(
-    edges: np.ndarray, lower: np.ndarray, upper: np.ndarray
-) -> np.ndarray:
-    """The smallest spacing of the cells of ``edges`` each interval overlaps."""
-    spacing = np.diff(edges)
-    first = np.clip(
-        np.searchsorted(edges, lower, side="right") - 1, 0, spacing.size - 1
-    )
-    last = np.clip(np.searchsorted(edges, upper, side="left"), first + 1, spacing.size)
-    # the minimum over spacing[first:last] for every interval (a sparse table)
-    table = [spacing]
-    while 2 ** len(table) <= spacing.size:
-        previous, step = table[-1], 2 ** (len(table) - 1)
-        table.append(np.minimum(previous[:-step], previous[step:]))
-    width = last - first
-    power = np.floor(np.log2(width)).astype(int)
-    result = np.empty(lower.shape)
-    for k in np.unique(power):
-        mine = power == k
-        start, stop = first[mine], last[mine] - 2**k
-        result[mine] = np.minimum(table[k][start], table[k][stop])
-    return result

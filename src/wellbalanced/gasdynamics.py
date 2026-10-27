@@ -689,6 +689,10 @@ class GasDynamics:
         prim = self._primitive(self._u) if prim is None else prim
         return prim[4] / (BOLTZMANN * self._number(prim[0], prim[1]))
 
+    def _check_ready(self) -> None:
+        if not self._ready:
+            raise RuntimeError("set the state first (set_state or set_uniform)")
+
     def state(self) -> GasState:
         """The current gas as a :class:`GasState`."""
         self._check_ready()
@@ -715,10 +719,6 @@ class GasDynamics:
             name: float(np.sum(self._u[k]) * volume)
             for k, name in enumerate(QUANTITIES)
         }
-
-    def _check_ready(self) -> None:
-        if not self._ready:
-            raise RuntimeError("set the state first (set_state or set_uniform)")
 
     # -- the right-hand side ------------------------------------------------------------
 
@@ -941,17 +941,6 @@ class GasDynamics:
         tendency += volume
         return tendency, boundary_input + volume.sum(axis=(1, 2)) * self.dx * self.dy
 
-    def stable_step(self) -> float:
-        """The acoustic CFL time step of the current state."""
-        self._check_ready()
-        prim = self._primitive(self._u)
-        c = np.sqrt(self.gamma * prim[4] / (prim[0] + prim[1]))
-        rate = (np.abs(prim[2]) + c) / self.dx
-        if self.ny > 1:
-            rate = rate + (np.abs(prim[3]) + c) / self.dy
-        step = float(self.cfl / rate.max())
-        return min(step, self._source_step(prim))
-
     def _source_step(self, prim: np.ndarray) -> float:
         """The step in which no source adds or removes more than ``source_cfl`` of a cell.
 
@@ -1011,6 +1000,17 @@ class GasDynamics:
             if top > 0.0:
                 limit = min(limit, fraction / top)
         return limit
+
+    def stable_step(self) -> float:
+        """The acoustic CFL time step of the current state."""
+        self._check_ready()
+        prim = self._primitive(self._u)
+        c = np.sqrt(self.gamma * prim[4] / (prim[0] + prim[1]))
+        rate = (np.abs(prim[2]) + c) / self.dx
+        if self.ny > 1:
+            rate = rate + (np.abs(prim[3]) + c) / self.dy
+        step = float(self.cfl / rate.max())
+        return min(step, self._source_step(prim))
 
     # -- diffusion ----------------------------------------------------------------------
 
@@ -1116,6 +1116,10 @@ class GasDynamics:
                 internal = new
         return rate
 
+    def _accumulate(self, amount: np.ndarray) -> None:
+        for name, value in zip(QUANTITIES, amount, strict=True):
+            self.budget[name] += float(value)
+
     # -- stepping -----------------------------------------------------------------------
 
     @profile("wellbalanced.GasDynamics.step", tags=_PROFILE_TAGS)
@@ -1137,10 +1141,6 @@ class GasDynamics:
         self.time += dt
         self.steps += 1
         return dt
-
-    def _accumulate(self, amount: np.ndarray) -> None:
-        for name, value in zip(QUANTITIES, amount, strict=True):
-            self.budget[name] += float(value)
 
     @profile("wellbalanced.GasDynamics.run", tags=_PROFILE_TAGS)
     def run(

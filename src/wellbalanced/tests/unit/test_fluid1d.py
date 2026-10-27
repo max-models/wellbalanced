@@ -340,3 +340,37 @@ def test_bad_models_are_refused() -> None:
         FluidSpecies(ION, 0.1, diffusion=1.0, momentum=True)
     with pytest.raises(ValueError, match="unknown species"):
         plasma(0.01, 10, reactions=[Reaction(("e", "Xe"), ("e",), 1.0)])
+
+
+@pytest.mark.parametrize("momentum", [False, True])
+def test_an_outflow_takes_its_speed_times_the_density(momentum: bool) -> None:
+    """A source between a symmetry plane and an outflow: the level follows the speed."""
+    source = 1.0e20  # m^-3 s^-1
+    states = {}
+    for speed in (500.0, 1000.0):
+        model = plasma(
+            0.02,
+            100,
+            species=[
+                FluidSpecies(ELECTRON, 30.0),
+                FluidSpecies(ION, 10.0, momentum=momentum),
+            ],
+            sources={"e": source, "Ar+": source},
+            boundaries={
+                "left": {"e": Boundary.symmetry(), "Ar+": Boundary.symmetry()},
+                "right": {"e": Boundary.outflow(speed), "Ar+": Boundary.outflow(speed)},
+            },
+            potential={"left": PotentialBoundary.field(0.0)},
+        )
+        guess = np.full(model.cells, source * 0.02 / speed)
+        state = model.steady_state(model.pack({"e": guess, "Ar+": guess}, TE, 0.0))
+        assert state.converged
+        for name in ("e", "Ar+"):
+            assert state.fluxes[name][-1] == pytest.approx(source * 0.02, rel=1e-8)
+            assert state.fluxes[name][-1] == pytest.approx(
+                speed * state.densities[name][-1], rel=1e-10
+            )
+        states[speed] = state
+    assert states[500.0].densities["Ar+"][-1] == pytest.approx(
+        2.0 * states[1000.0].densities["Ar+"][-1], rel=1e-6
+    )

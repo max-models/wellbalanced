@@ -40,7 +40,8 @@ solves the steady equations themselves.
 Boundaries, per species and end (``"left"``, ``"right"``), may be changed between
 steps (the fluid side of a fluid-PIC coupling): an absorbing wall (the drift
 towards it plus half the thermal flux, after Hagelaar et al. 2000, with a
-reflection coefficient), a prescribed density, a prescribed flux, or symmetry. The potential at each end is a prescribed value or a prescribed field.
+reflection coefficient), a prescribed density, a prescribed flux, an outflow at a
+prescribed speed, or symmetry. The potential at each end is a prescribed value or a prescribed field.
 For a species with momentum a wall takes the outflow of its momentum balance
 over the half cell next to it (supersonic, as into a sheath), and a
 prescribed density flows in or out at the velocity of the last face between
@@ -180,8 +181,8 @@ class Boundary:
     """The condition of one species at one end.
 
     Use the constructors: :meth:`wall`, :meth:`density`, :meth:`flux`,
-    :meth:`symmetry`. ``value`` is the density (m^-3) or the flux into the
-    domain (m^-2 s^-1); ``temperature`` (eV) the electron temperature of a
+    :meth:`outflow`, :meth:`symmetry`. ``value`` is the density (m^-3), the flux into
+    the domain (m^-2 s^-1) or the outflow speed (m/s); ``temperature`` (eV) the electron temperature of a
     prescribed electron density; ``reflection`` the wall's reflection
     coefficient; ``thermal_share`` the share of ``v_th n`` a wall takes.
     """
@@ -216,6 +217,18 @@ class Boundary:
     def flux(cls, value: float, temperature: float | None = None) -> Boundary:
         """A prescribed flux into the domain (and, for electrons, their temperature)."""
         return cls("flux", value, temperature)
+
+    @classmethod
+    def outflow(cls, speed: float) -> Boundary:
+        """An outflow at ``speed`` (m/s): the flux out of the domain is ``speed n``.
+
+        ``n`` is the density of the cell next to the end. The fluid side of a
+        fluid-PIC coupling with an overlap: the PIC's flux over its density at the
+        end, so the flux follows the fluid's density there (a prescribed flux
+        leaves the level of a plasma between a symmetry plane and the end free).
+        Electrons take ``2 T_e`` each with them.
+        """
+        return cls("outflow", speed)
 
     @classmethod
     def symmetry(cls) -> Boundary:
@@ -554,6 +567,11 @@ class Fluid1D:
         scale = 5.0 / 3.0 if energy else 1.0
         if condition.kind == "symmetry":
             return 0.0
+        if condition.kind == "outflow":
+            # 2 T per electron: (4/3) speed w
+            return float(
+                outward * condition.value * n_cell * (4.0 / 3.0 if energy else 1.0)
+            )
         if condition.kind == "flux":
             # value is into the domain
             flux = -outward * condition.value
@@ -638,6 +656,8 @@ class Fluid1D:
             return 0.0
         if condition.kind == "flux":
             return -outward * condition.value
+        if condition.kind == "outflow":
+            return float(outward * condition.value * n_cell)
         if condition.kind == "density":
             # upwind, at the inner face's velocity: the held density flows in,
             # the cell's flows out

@@ -7,6 +7,12 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `boeuf_dispersion_roots` (`wellbalanced.driftfluid2d`): Boeuf's local gradient-drift
+  relation, Eq. (1) of arXiv:2211.17051 (finite Larmor radius, grad-B drift, Poisson),
+  checked against his linear phase (1e7 /s at 1.6 cm, +17 km/s). The linear stability of the
+  drift fluid's 1D Boeuf state (gallery study 07) does not reproduce that phase: its leading
+  mode is ionization-driven and hardly propagates, because the 1D density falls towards
+  the anode over L_n of about -5 mm instead of his -2.2 mm (module docstring).
 - `Boundary.outflow(speed)` of `Fluid1D`: the flux out of an end is the speed times the
   density next to it, the fluid side of a two-way fluid-PIC coupling (the PIC's flux over
   its density at the end of the overlap region).

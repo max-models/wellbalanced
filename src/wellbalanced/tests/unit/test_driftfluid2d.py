@@ -14,6 +14,7 @@ from wellbalanced.driftfluid2d import (
     argon_excitation_rate,
     argon_ionization_rate,
     argon_momentum_rate,
+    boeuf_dispersion_roots,
     exponential_field,
     fit_mode,
     gradient_drift_roots,
@@ -309,6 +310,41 @@ def test_the_dispersion_relation_is_damped_without_a_drive() -> None:
     )
     assert quasi.imag.max() > 1e6
     assert full.imag.max() == pytest.approx(quasi.imag.max(), rel=0.02)
+
+
+BOEUF_18MM = {
+    "density": 0.8e15,
+    "e_field": -2200.0,
+    "b_field": 6e-3,
+    "electron_temperature": 11.4,
+    "density_length": -2.2e-3,
+    "field_length": -6e-3,
+    "electron_collision_frequency": 2e7,
+}
+
+
+def _fastest(parameters: dict) -> tuple[float, float, float]:
+    """Largest growth rate of Boeuf's relation over 0.3-8 cm, its wavelength and speed."""
+    best = (-np.inf, 0.0, 0.0)
+    for wavelength in np.linspace(0.003, 0.08, 300):
+        k = 2 * np.pi / wavelength
+        roots = boeuf_dispersion_roots(k, **parameters)
+        root = roots[np.argmax(roots.imag)]
+        if root.imag > best[0]:
+            best = (float(root.imag), float(wavelength), float(root.real / k))
+    return best
+
+
+def test_boeuf_relation_gives_his_linear_phase_and_hinges_on_the_gradient() -> None:
+    # his numbers at x = 1.8 cm: 1.1e7 /s at k = 400 /m (1.6 cm), 17 km/s along +E x B
+    gamma, wavelength, speed = _fastest(BOEUF_18MM)
+    assert gamma == pytest.approx(1.1e7, rel=0.1)
+    assert wavelength == pytest.approx(0.016, rel=0.1)
+    assert speed == pytest.approx(17e3, rel=0.1)
+    # the drive is the density gradient: at L_n = -5 mm (the drift fluid's 1D state) the
+    # growth rate falls by two orders of magnitude
+    gentle = _fastest({**BOEUF_18MM, "density_length": -5e-3})
+    assert gentle[0] < 0.02 * gamma
 
 
 def test_the_fitted_rates_are_bounded_and_give_the_quoted_collision_frequency() -> None:

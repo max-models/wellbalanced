@@ -37,7 +37,7 @@ __all__ = ["AuxiliarySpacePreconditioner", "IterativeResult", "cocg"]
 def _prolongation_1d(n: int, periodic: bool) -> sp.csr_matrix:
     """Linear interpolation from every other node to all ``n`` nodes of an axis."""
     if n <= 3 or (periodic and n % 2):
-        return sp.identity(n, format="csr")
+        return sp.csr_matrix(sp.identity(n))
     coarse = n // 2 if periodic else (n + 1) // 2
     rows, cols, values = [], [], []
     for i in range(n):
@@ -60,7 +60,7 @@ def _prolongation_1d(n: int, periodic: bool) -> sp.csr_matrix:
     return sp.csr_matrix((values, (rows, cols)), shape=(n, coarse))
 
 
-def _l1_diagonal(matrix: sp.spmatrix) -> np.ndarray:
+def _l1_diagonal(matrix: sp.csr_matrix) -> np.ndarray:
     return np.asarray(abs(matrix).sum(axis=1)).ravel()
 
 
@@ -88,19 +88,19 @@ class _Multigrid:
         while True:
             diagonal = _l1_diagonal(matrix)
             diagonal[diagonal == 0] = 1.0
-            if matrix.shape[0] <= coarsest:
+            if matrix.shape[0] <= coarsest:  # type: ignore[index]
                 break
             factors = [
                 _prolongation_1d(n, p) for n, p in zip(lattice, periodic, strict=True)
             ]
-            coarse_lattice = tuple(f.shape[1] for f in factors)
+            coarse_lattice = tuple(f.shape[1] for f in factors)  # type: ignore[index]
             if coarse_lattice == lattice:
                 break
             full = sp.kron(sp.kron(factors[0], factors[1]), factors[2], format="csr")
             block = full[active]
             coarse_active = np.flatnonzero(np.asarray(abs(block).sum(axis=0)).ravel())
             block = block[:, coarse_active]
-            prolongation = sp.block_diag([block] * components, format="csr")
+            prolongation = sp.csr_matrix(sp.block_diag([block] * components))
             self.levels.append((matrix, 1.0 / diagonal, prolongation))
             matrix = sp.csr_matrix(prolongation.T @ matrix @ prolongation)
             lattice, active = coarse_lattice, coarse_active
@@ -126,7 +126,7 @@ class _Multigrid:
     def __call__(self, rhs: np.ndarray) -> np.ndarray:
         """One V-cycle from zero, for the real and imaginary parts."""
         if np.iscomplexobj(rhs):
-            return self._cycle(0, rhs.real) + 1j * self._cycle(0, rhs.imag)
+            return self._cycle(0, np.real(rhs)) + 1j * self._cycle(0, np.imag(rhs))
         return self._cycle(0, rhs)
 
 

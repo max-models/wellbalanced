@@ -359,6 +359,36 @@ class SpokeReport:
     window: tuple[float, float]
 
 
+def fit_mode(
+    times: np.ndarray,
+    amplitudes: np.ndarray,
+    mode: int,
+    length_y: float,
+    window: tuple[float, float] | None = None,
+) -> ModeFit:
+    """Fit the growth rate and the phase speed of mode ``mode`` in a time window.
+
+    Args:
+        times: The recording times (s).
+        amplitudes: :func:`mode_amplitudes` at those times.
+        mode: The mode number ``m``.
+        length_y: The azimuthal period (m).
+        window: ``(t0, t1)`` to fit in; the whole record by default.
+    """
+    times = np.asarray(times, dtype=float)
+    select = np.ones(times.shape, bool)
+    if window is not None:
+        select = (times >= window[0]) & (times <= window[1])
+    if select.sum() < 3:
+        raise ValueError("need at least 3 records in the window")
+    t = times[select]
+    a = amplitudes[select, mode]
+    growth = np.polyfit(t, np.log(np.abs(a)), 1)[0]
+    omega = -np.polyfit(t, np.unwrap(np.angle(a)), 1)[0]
+    k = 2.0 * np.pi * mode / length_y
+    return ModeFit(mode, float(growth), float(omega), float(omega / k))
+
+
 def spoke_report(run: Run, window: tuple[float, float] | None = None) -> SpokeReport:
     """The :class:`SpokeReport` of a run over a time window (the last half by default)."""
     t = run.times
@@ -402,36 +432,6 @@ def mode_amplitudes(values: np.ndarray) -> np.ndarray:
     values = np.asarray(values, dtype=float)
     mean = values.mean(axis=-1, keepdims=True)
     return np.fft.rfft(values / mean - 1.0, axis=-1) / values.shape[-1]
-
-
-def fit_mode(
-    times: np.ndarray,
-    amplitudes: np.ndarray,
-    mode: int,
-    length_y: float,
-    window: tuple[float, float] | None = None,
-) -> ModeFit:
-    """Fit the growth rate and the phase speed of mode ``mode`` in a time window.
-
-    Args:
-        times: The recording times (s).
-        amplitudes: :func:`mode_amplitudes` at those times.
-        mode: The mode number ``m``.
-        length_y: The azimuthal period (m).
-        window: ``(t0, t1)`` to fit in; the whole record by default.
-    """
-    times = np.asarray(times, dtype=float)
-    select = np.ones(times.shape, bool)
-    if window is not None:
-        select = (times >= window[0]) & (times <= window[1])
-    if select.sum() < 3:
-        raise ValueError("need at least 3 records in the window")
-    t = times[select]
-    a = amplitudes[select, mode]
-    growth = np.polyfit(t, np.log(np.abs(a)), 1)[0]
-    omega = -np.polyfit(t, np.unwrap(np.angle(a)), 1)[0]
-    k = 2.0 * np.pi * mode / length_y
-    return ModeFit(mode, float(growth), float(omega), float(omega / k))
 
 
 def _plasma_parameters(
@@ -784,33 +784,90 @@ class DriftFluid2D:
     bohm: float = 0.0
     external_sources: dict[str, np.ndarray] = field(default_factory=dict)
 
-    def __post_init__(self) -> None:
-        """Build the grid and the sparse operators."""
-        if self.nx < 4 or self.ny < 4:
-            raise ValueError("need at least 4 cells in each direction")
-        if self.periodic_x and self.field_bc is None:
-            raise ValueError("periodic_x needs field_bc, the uniform axial field")
-        self.dx = self.length_x / self.nx
-        self.dy = self.length_y / self.ny
-        self.x = (np.arange(self.nx) + 0.5) * self.dx
-        self.xf = np.arange(self.nx + 1) * self.dx
-        self.y = (np.arange(self.ny) + 0.5) * self.dy
-        self.ion_mass = self.ion_mass_u * ATOMIC_MASS - ELECTRON_MASS
-        bfun = self.magnetic_field
-        if not callable(bfun):
-            value = float(bfun)
+    def _build_poisson_pattern(self) -> None:
+        """Fix the sparsity of the Poisson matrix: its entries are linear in the face coefficients.
 
-            def uniform_field(x):
-                return np.full_like(np.asarray(x, dtype=float), value)
+        ``A = -(DIVX Cxx GXF + DIVX Cxy MGY + DIVY Cyy GYF + DIVY Cyx GXYF)`` with diagonal
+        ``C``: ``data = B @ concat(cxx, cxy, cyy, cyx)`` for a fixed ``B``.
+        """
+        terms = [
+            (self._divx, self._gxf),
+            (self._divx, self._gyxf_masked),
+            (self._divy, self._gyf),
+            (self._divy, self._gxyf),
+        ]
+        sizes = [t[0].shape[1] for t in terms]
+        offsets = np.r_[0, np.cumsum(sizes)]
+        ncell = self.nx * self.ny
+        entries = []  # (row, col, coefficient index, value)
+        for k, (div, grad) in enumerate(terms):
+            div_csc = div.tocsc()
+            grad_csr = grad.tocsr()
+            for face in range(div.shape[1]):
+                drows = div_csc.indices[div_csc.indptr[face] : div_csc.indptr[face + 1]]
+                dvals = div_csc.data[div_csc.indptr[face] : div_csc.indptr[face + 1]]
+                lo, hi = grad_csr.indptr[face], grad_csr.indptr[face + 1]
+                for r, dv in zip(drows, dvals, strict=True):
+                    for c, gv in zip(
+                        grad_csr.indices[lo:hi], grad_csr.data[lo:hi], strict=True
+                    ):
+                        entries.append((r, c, offsets[k] + face, -dv * gv))
+        rows, cols, idx, vals = (np.array(x) for x in zip(*entries, strict=True))
+        key = rows * ncell + cols
+        unique, position = np.unique(key, return_inverse=True)
+        self._pat_rows = unique // ncell
+        self._pat_cols = unique % ncell
+        self._pat_b = sp.csr_matrix(
+            (vals, (position, idx)), shape=(len(unique), offsets[-1])
+        )
 
-            bfun = uniform_field
-
-        self._bc = np.asarray(bfun(self.x), dtype=float)
-        self._bf = np.asarray(bfun(self.xf), dtype=float)
-        self._k0 = 1.0 if callable(self.momentum_rate) else float(self.momentum_rate)
-        self._omega_xf = (E * self._bf / ELECTRON_MASS)[:, None]
-        self._omega_yf = (E * self._bc / ELECTRON_MASS)[:, None]
-        self._build_operators()
+    def _build_periodic_x_operators(self, ix, iy, d_yc, d_yf, a_yf, div_y) -> None:
+        """The operators of a domain periodic in ``x``: face ``nx`` repeats face 0."""
+        nx, ny, dx = self.nx, self.ny, self.dx
+        faces = np.arange(nx + 1)
+        right, left = faces % nx, (faces - 1) % nx
+        d_xf = sp.csr_matrix(
+            (
+                np.r_[np.full(nx + 1, 1.0 / dx), np.full(nx + 1, -1.0 / dx)],
+                (np.r_[faces, faces], np.r_[right, left]),
+            ),
+            shape=(nx + 1, nx),
+        )
+        a_xf = sp.csr_matrix(
+            (
+                np.full(2 * (nx + 1), 0.5),
+                (np.r_[faces, faces], np.r_[right, left]),
+            ),
+            shape=(nx + 1, nx),
+        )
+        cells = np.arange(nx)
+        d_xc = sp.csr_matrix(
+            (
+                np.r_[np.full(nx, 0.5 / dx), np.full(nx, -0.5 / dx)],
+                (np.r_[cells, cells], np.r_[(cells + 1) % nx, (cells - 1) % nx]),
+            ),
+            shape=(nx, nx),
+        )
+        div_x = sp.csr_matrix(
+            (
+                np.r_[np.full(nx, -1.0 / dx), np.full(nx, 1.0 / dx)],
+                (np.r_[cells, cells], np.r_[cells, cells + 1]),
+            ),
+            shape=(nx, nx + 1),
+        )
+        self._gxf = sp.kron(d_xf, iy, format="csr")
+        self._gyxf_masked = sp.kron(a_xf, d_yc, format="csr")
+        self._gyf = sp.kron(ix, d_yf, format="csr")
+        self._gxyf = sp.kron(d_xc, a_yf, format="csr")
+        self._dxc = sp.kron(d_xc, iy, format="csr")
+        self._dyc = sp.kron(ix, d_yc, format="csr")
+        self._divx = sp.kron(div_x, iy, format="csr")
+        self._divy = sp.kron(ix, div_y, format="csr")
+        self._pyxf = sp.kron(a_xf, d_yc, format="csr")
+        self._axf = sp.kron(a_xf, iy, format="csr")
+        self._ayf = sp.kron(ix, a_yf, format="csr")
+        self._shape_xf = (nx + 1, ny)
+        self._build_poisson_pattern()
 
     # -- operators ------------------------------------------------------------------
 
@@ -888,90 +945,33 @@ class DriftFluid2D:
         self._shape_xf = (nx + 1, ny)
         self._build_poisson_pattern()
 
-    def _build_periodic_x_operators(self, ix, iy, d_yc, d_yf, a_yf, div_y) -> None:
-        """The operators of a domain periodic in ``x``: face ``nx`` repeats face 0."""
-        nx, ny, dx = self.nx, self.ny, self.dx
-        faces = np.arange(nx + 1)
-        right, left = faces % nx, (faces - 1) % nx
-        d_xf = sp.csr_matrix(
-            (
-                np.r_[np.full(nx + 1, 1.0 / dx), np.full(nx + 1, -1.0 / dx)],
-                (np.r_[faces, faces], np.r_[right, left]),
-            ),
-            shape=(nx + 1, nx),
-        )
-        a_xf = sp.csr_matrix(
-            (
-                np.full(2 * (nx + 1), 0.5),
-                (np.r_[faces, faces], np.r_[right, left]),
-            ),
-            shape=(nx + 1, nx),
-        )
-        cells = np.arange(nx)
-        d_xc = sp.csr_matrix(
-            (
-                np.r_[np.full(nx, 0.5 / dx), np.full(nx, -0.5 / dx)],
-                (np.r_[cells, cells], np.r_[(cells + 1) % nx, (cells - 1) % nx]),
-            ),
-            shape=(nx, nx),
-        )
-        div_x = sp.csr_matrix(
-            (
-                np.r_[np.full(nx, -1.0 / dx), np.full(nx, 1.0 / dx)],
-                (np.r_[cells, cells], np.r_[cells, cells + 1]),
-            ),
-            shape=(nx, nx + 1),
-        )
-        self._gxf = sp.kron(d_xf, iy, format="csr")
-        self._gyxf_masked = sp.kron(a_xf, d_yc, format="csr")
-        self._gyf = sp.kron(ix, d_yf, format="csr")
-        self._gxyf = sp.kron(d_xc, a_yf, format="csr")
-        self._dxc = sp.kron(d_xc, iy, format="csr")
-        self._dyc = sp.kron(ix, d_yc, format="csr")
-        self._divx = sp.kron(div_x, iy, format="csr")
-        self._divy = sp.kron(ix, div_y, format="csr")
-        self._pyxf = sp.kron(a_xf, d_yc, format="csr")
-        self._axf = sp.kron(a_xf, iy, format="csr")
-        self._ayf = sp.kron(ix, a_yf, format="csr")
-        self._shape_xf = (nx + 1, ny)
-        self._build_poisson_pattern()
+    def __post_init__(self) -> None:
+        """Build the grid and the sparse operators."""
+        if self.nx < 4 or self.ny < 4:
+            raise ValueError("need at least 4 cells in each direction")
+        if self.periodic_x and self.field_bc is None:
+            raise ValueError("periodic_x needs field_bc, the uniform axial field")
+        self.dx = self.length_x / self.nx
+        self.dy = self.length_y / self.ny
+        self.x = (np.arange(self.nx) + 0.5) * self.dx
+        self.xf = np.arange(self.nx + 1) * self.dx
+        self.y = (np.arange(self.ny) + 0.5) * self.dy
+        self.ion_mass = self.ion_mass_u * ATOMIC_MASS - ELECTRON_MASS
+        bfun = self.magnetic_field
+        if not callable(bfun):
+            value = float(bfun)
 
-    def _build_poisson_pattern(self) -> None:
-        """Fix the sparsity of the Poisson matrix: its entries are linear in the face coefficients.
+            def uniform_field(x):
+                return np.full_like(np.asarray(x, dtype=float), value)
 
-        ``A = -(DIVX Cxx GXF + DIVX Cxy MGY + DIVY Cyy GYF + DIVY Cyx GXYF)`` with diagonal
-        ``C``: ``data = B @ concat(cxx, cxy, cyy, cyx)`` for a fixed ``B``.
-        """
-        terms = [
-            (self._divx, self._gxf),
-            (self._divx, self._gyxf_masked),
-            (self._divy, self._gyf),
-            (self._divy, self._gxyf),
-        ]
-        sizes = [t[0].shape[1] for t in terms]
-        offsets = np.r_[0, np.cumsum(sizes)]
-        ncell = self.nx * self.ny
-        entries = []  # (row, col, coefficient index, value)
-        for k, (div, grad) in enumerate(terms):
-            div_csc = div.tocsc()
-            grad_csr = grad.tocsr()
-            for face in range(div.shape[1]):
-                drows = div_csc.indices[div_csc.indptr[face] : div_csc.indptr[face + 1]]
-                dvals = div_csc.data[div_csc.indptr[face] : div_csc.indptr[face + 1]]
-                lo, hi = grad_csr.indptr[face], grad_csr.indptr[face + 1]
-                for r, dv in zip(drows, dvals, strict=True):
-                    for c, gv in zip(
-                        grad_csr.indices[lo:hi], grad_csr.data[lo:hi], strict=True
-                    ):
-                        entries.append((r, c, offsets[k] + face, -dv * gv))
-        rows, cols, idx, vals = (np.array(x) for x in zip(*entries, strict=True))
-        key = rows * ncell + cols
-        unique, position = np.unique(key, return_inverse=True)
-        self._pat_rows = unique // ncell
-        self._pat_cols = unique % ncell
-        self._pat_b = sp.csr_matrix(
-            (vals, (position, idx)), shape=(len(unique), offsets[-1])
-        )
+            bfun = uniform_field
+
+        self._bc = np.asarray(bfun(self.x), dtype=float)
+        self._bf = np.asarray(bfun(self.xf), dtype=float)
+        self._k0 = 1.0 if callable(self.momentum_rate) else float(self.momentum_rate)
+        self._omega_xf = (E * self._bf / ELECTRON_MASS)[:, None]
+        self._omega_yf = (E * self._bc / ELECTRON_MASS)[:, None]
+        self._build_operators()
 
     def _affine(self) -> tuple[np.ndarray, np.ndarray]:
         """Constant parts of the face gradients of the potential from the boundary values."""
@@ -1034,6 +1034,9 @@ class DriftFluid2D:
             np.asarray(potential, dtype=float).copy(),
         )
 
+    def _bohm_nu(self, omega):
+        return self.bohm * np.abs(omega) / 16.0
+
     # -- transport coefficients -------------------------------------------------------
 
     def _collisions(self, gas_xf, gas_yf):
@@ -1067,9 +1070,6 @@ class DriftFluid2D:
                 loss + self.excitation_energy_ev * self.excitation_rate(te) * gas * ne
             )
         return loss
-
-    def _bohm_nu(self, omega):
-        return self.bohm * np.abs(omega) / 16.0
 
     def _dx_cell(self, f: np.ndarray) -> np.ndarray:
         """Central ``d f / dx`` on cells, one-sided half-steps at the ends."""
@@ -1170,6 +1170,49 @@ class DriftFluid2D:
         nyf = np.where(vyf > 0.0, np.roll(ni, 1, axis=1), ni)
         return gam_x, nyf * vyf
 
+    def _cathode_flux(self, ion_flux: np.ndarray) -> np.ndarray:
+        """Electron flux into the domain at the cathode, for the ion flux ``ion_flux`` (< 0)."""
+        if self.cathode_current_density is not None:
+            return np.full_like(ion_flux, self.cathode_current_density / E)
+        return -self.secondary_emission * ion_flux
+
+    def _solve_linear(self, matrix, rhs: np.ndarray) -> np.ndarray:
+        """Solve ``matrix x = rhs``, refining with the last LU factors while they still work.
+
+        The matrix changes by a few percent per stage, so the previous factorisation is a
+        very good preconditioner; the iteration runs to a relative residual of 1e-12
+        (the solution is as exact as a fresh factorisation) and refactorises when it
+        does not get there in a few sweeps.
+        """
+        scale = np.linalg.norm(rhs) + 1e-300
+        if self._lu is not None:
+            x = self._lu.solve(rhs)
+            for _ in range(10):
+                residual = rhs - matrix @ x
+                if np.linalg.norm(residual) <= 1e-12 * scale:
+                    return x
+                x = x + self._lu.solve(residual)
+        lu = spla.splu(matrix, permc_spec="COLAMD")
+        self._lu = lu
+        return lu.solve(rhs)
+
+    def _anode_flux(self, ne, te, gas, ex, ey):
+        """Electron flux out through the anode face: the drift of the adjacent cell, outflow only.
+
+        With ``anode_thermal_flux`` the thermal flux of an absorbing wall is added.
+        ``ex``, ``ey`` are the field components on the anode face (length ``ny``).
+        """
+        gas_xf, gas_yf = self._face_gas(gas)
+        (mu_xf, h_xf), _ = self._collisions(gas_xf, gas_yf)
+        dpx_xf, dpy_xf, _, _ = self._pressure_gradients(ne * te)
+        fx = ne[-1] * ex + dpx_xf[-1]
+        fy = ne[-1] * ey + dpy_xf[-1]
+        flux = -mu_xf[-1] * (fx - h_xf[-1] * fy)
+        if self.anode_thermal_flux:
+            mean_speed = np.sqrt(8.0 * E * te[-1] / (np.pi * ELECTRON_MASS))
+            flux = flux + 0.5 * ne[-1] * mean_speed
+        return np.maximum(flux, 0.0)
+
     # -- the potential ----------------------------------------------------------------
 
     @profile("wellbalanced.DriftFluid2D.solve_potential", tags=_PROFILE_TAGS)
@@ -1224,48 +1267,20 @@ class DriftFluid2D:
             rhs[0] = 0.0
         return self._solve_linear(matrix, rhs).reshape(nx, ny)
 
-    def _cathode_flux(self, ion_flux: np.ndarray) -> np.ndarray:
-        """Electron flux into the domain at the cathode, for the ion flux ``ion_flux`` (< 0)."""
-        if self.cathode_current_density is not None:
-            return np.full_like(ion_flux, self.cathode_current_density / E)
-        return -self.secondary_emission * ion_flux
-
-    def _solve_linear(self, matrix, rhs: np.ndarray) -> np.ndarray:
-        """Solve ``matrix x = rhs``, refining with the last LU factors while they still work.
-
-        The matrix changes by a few percent per stage, so the previous factorisation is a
-        very good preconditioner; the iteration runs to a relative residual of 1e-12
-        (the solution is as exact as a fresh factorisation) and refactorises when it
-        does not get there in a few sweeps.
-        """
-        scale = np.linalg.norm(rhs) + 1e-300
-        if self._lu is not None:
-            x = self._lu.solve(rhs)
-            for _ in range(10):
-                residual = rhs - matrix @ x
-                if np.linalg.norm(residual) <= 1e-12 * scale:
-                    return x
-                x = x + self._lu.solve(residual)
-        lu = spla.splu(matrix, permc_spec="COLAMD")
-        self._lu = lu
-        return lu.solve(rhs)
-
-    def _anode_flux(self, ne, te, gas, ex, ey):
-        """Electron flux out through the anode face: the drift of the adjacent cell, outflow only.
-
-        With ``anode_thermal_flux`` the thermal flux of an absorbing wall is added.
-        ``ex``, ``ey`` are the field components on the anode face (length ``ny``).
-        """
-        gas_xf, gas_yf = self._face_gas(gas)
-        (mu_xf, h_xf), _ = self._collisions(gas_xf, gas_yf)
-        dpx_xf, dpy_xf, _, _ = self._pressure_gradients(ne * te)
-        fx = ne[-1] * ex + dpx_xf[-1]
-        fy = ne[-1] * ey + dpy_xf[-1]
-        flux = -mu_xf[-1] * (fx - h_xf[-1] * fy)
-        if self.anode_thermal_flux:
-            mean_speed = np.sqrt(8.0 * E * te[-1] / (np.pi * ELECTRON_MASS))
-            flux = flux + 0.5 * ne[-1] * mean_speed
-        return np.maximum(flux, 0.0)
+    def _advect(self, f, vx, vy):
+        """``v . grad f`` by first-order upwind; zero gradient at the electrodes."""
+        if self.periodic_x:
+            fm, fp = np.roll(f, 1, axis=0), np.roll(f, -1, axis=0)
+        else:
+            fm = np.vstack([f[:1], f[:-1]])
+            fp = np.vstack([f[1:], f[-1:]])
+        dfx = np.where(vx > 0.0, (f - fm) / self.dx, (fp - f) / self.dx)
+        dfy = np.where(
+            vy > 0.0,
+            (f - np.roll(f, 1, axis=1)) / self.dy,
+            (np.roll(f, -1, axis=1) - f) / self.dy,
+        )
+        return vx * dfx + vy * dfy
 
     # -- the right-hand side -----------------------------------------------------------
 
@@ -1339,6 +1354,20 @@ class DriftFluid2D:
             if key in du:
                 du[key] = du[key] + source
         return du, phi
+
+    # -- time stepping -----------------------------------------------------------------
+
+    def _pack(self, state: DriftFluid2DState) -> dict:
+        u = {
+            "ne": state.electron_density.copy(),
+            "ni": state.ion_density.copy(),
+            "vx": state.ion_velocity[0].copy(),
+            "vy": state.ion_velocity[1].copy(),
+            "N": state.gas_density.copy(),
+        }
+        if self.electron_temperature is None:
+            u["w"] = 1.5 * state.electron_density * state.electron_temperature
+        return u
 
     @profile("wellbalanced.DriftFluid2D.linear_modes", tags=_PROFILE_TAGS)
     def linear_modes(
@@ -1449,35 +1478,6 @@ class DriftFluid2D:
         du, _ = self._rhs(u, state.potential, 0.0)
         self.external_sources = {key: -value for key, value in du.items() if key in u}
         return self.external_sources
-
-    def _advect(self, f, vx, vy):
-        """``v . grad f`` by first-order upwind; zero gradient at the electrodes."""
-        if self.periodic_x:
-            fm, fp = np.roll(f, 1, axis=0), np.roll(f, -1, axis=0)
-        else:
-            fm = np.vstack([f[:1], f[:-1]])
-            fp = np.vstack([f[1:], f[-1:]])
-        dfx = np.where(vx > 0.0, (f - fm) / self.dx, (fp - f) / self.dx)
-        dfy = np.where(
-            vy > 0.0,
-            (f - np.roll(f, 1, axis=1)) / self.dy,
-            (np.roll(f, -1, axis=1) - f) / self.dy,
-        )
-        return vx * dfx + vy * dfy
-
-    # -- time stepping -----------------------------------------------------------------
-
-    def _pack(self, state: DriftFluid2DState) -> dict:
-        u = {
-            "ne": state.electron_density.copy(),
-            "ni": state.ion_density.copy(),
-            "vx": state.ion_velocity[0].copy(),
-            "vy": state.ion_velocity[1].copy(),
-            "N": state.gas_density.copy(),
-        }
-        if self.electron_temperature is None:
-            u["w"] = 1.5 * state.electron_density * state.electron_temperature
-        return u
 
     def _unpack(self, u: dict, phi: np.ndarray, time: float) -> DriftFluid2DState:
         if "w" in u:

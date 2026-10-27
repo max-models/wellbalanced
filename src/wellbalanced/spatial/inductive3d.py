@@ -151,6 +151,12 @@ class ImpedanceConductor3D:
         return (1.0 + 1.0j) * np.sqrt(omega * MU_0 / (2.0 * self.conductivity))
 
 
+def _curl(grid: EdgeGrid) -> sp.csr_matrix:
+    if not hasattr(grid, "_curl_matrix"):
+        grid._curl_matrix = grid.curl()  # type: ignore[attr-defined]
+    return grid._curl_matrix  # type: ignore[attr-defined]
+
+
 @dataclass(frozen=True)
 class InductiveSolution3D:
     """The time-harmonic field of :meth:`InductiveField3D.solve`, as complex amplitudes.
@@ -255,12 +261,6 @@ class InductiveSolution3D:
         return float(np.imag(self.impedance)) / self.omega
 
 
-def _curl(grid: EdgeGrid) -> sp.csr_matrix:
-    if not hasattr(grid, "_curl_matrix"):
-        grid._curl_matrix = grid.curl()  # type: ignore[attr-defined]
-    return grid._curl_matrix  # type: ignore[attr-defined]
-
-
 class InductiveField3D:
     """The 3D time-harmonic magnetoquasistatic field of coils and conductors.
 
@@ -287,64 +287,6 @@ class InductiveField3D:
         min_sine: The bound of ``sin(theta)`` in the cut faces' surface widths
             (:func:`~wellbalanced.spatial.cutcell.cut_cells`).
     """
-
-    def __init__(
-        self,
-        grid: EdgeGrid,
-        *,
-        frequency: float,
-        coils: Sequence[Coil3D] = (),
-        conductors: Sequence[Conductor3D] = (),
-        conductivity: PointField | None = None,
-        samples: int = 1,
-        regularization: float = 1e-6,
-        impedance_conductors: Sequence[ImpedanceConductor3D] = (),
-        cut_cells: bool = True,
-        min_air_fraction: float = 0.01,
-        min_sine: float = 0.1,
-    ) -> None:
-        """Sample the coils and conductors on the grid and assemble the operator."""
-        if frequency <= 0.0:
-            raise ValueError("frequency must be positive")
-        if regularization <= 0.0:
-            raise ValueError("the gauge needs a positive regularization")
-        self.grid = grid
-        self.frequency = float(frequency)
-        self.coils = tuple(coils)
-        self.conductors = tuple(conductors)
-        self.samples = int(samples)
-        self.regularization = float(regularization)
-        self._unit_source = self._coil_source()
-        self.conductivity, self.conductor_edges = self._edge_conductivity(conductivity)
-        self.edge_conductance = self.conductivity * grid.dual_areas / grid.edge_lengths
-        self.impedance_conductors = tuple(impedance_conductors)
-        self.cut_cells = bool(cut_cells)
-        if not 0.0 < min_air_fraction <= 1.0:
-            raise ValueError("min_air_fraction must be in (0, 1]")
-        self.min_air_fraction = float(min_air_fraction)
-        self._surfaces = [
-            cut_cells_of(grid, c.shapes, min_sine=min_sine)
-            if self.cut_cells
-            else staircased_cells(grid, c.shapes)
-            for c in self.impedance_conductors
-        ]
-        metal_edges = sum((1.0 - c.edge_air for c in self._surfaces), np.zeros(1))
-        metal_faces = sum((1.0 - c.face_air for c in self._surfaces), np.zeros(1))
-        #: The fraction of every edge's length outside the impedance conductors.
-        self.edge_air = np.clip(1.0 - metal_edges, 0.0, 1.0) * np.ones(grid.n_edges)
-        #: The fraction of every face's area outside the impedance conductors.
-        self.face_air = np.clip(1.0 - metal_faces, 0.0, 1.0) * np.ones(grid.n_faces)
-        #: The unknowns: the free edges not entirely inside an impedance conductor.
-        self.free_edges = grid.free_edges & (self.edge_air > 0.0)
-        volume = np.zeros(grid.n_edges, dtype=bool)
-        for name, edges in self.conductor_edges.items():
-            if name != "background":
-                volume |= edges
-        if np.any(volume & (self.edge_air < 1.0)):
-            raise ValueError("volume conductors must not touch impedance conductors")
-        self._factorizations: dict[float, Any] = {}
-        self._preconditioners: dict[float, Any] = {}
-        self._order: np.ndarray | None = None
 
     # --- sources and materials -----------------------------------------------------
 
@@ -430,6 +372,64 @@ class InductiveField3D:
                 edges["background"] = plasma
         return sigma, edges
 
+    def __init__(
+        self,
+        grid: EdgeGrid,
+        *,
+        frequency: float,
+        coils: Sequence[Coil3D] = (),
+        conductors: Sequence[Conductor3D] = (),
+        conductivity: PointField | None = None,
+        samples: int = 1,
+        regularization: float = 1e-6,
+        impedance_conductors: Sequence[ImpedanceConductor3D] = (),
+        cut_cells: bool = True,
+        min_air_fraction: float = 0.01,
+        min_sine: float = 0.1,
+    ) -> None:
+        """Sample the coils and conductors on the grid and assemble the operator."""
+        if frequency <= 0.0:
+            raise ValueError("frequency must be positive")
+        if regularization <= 0.0:
+            raise ValueError("the gauge needs a positive regularization")
+        self.grid = grid
+        self.frequency = float(frequency)
+        self.coils = tuple(coils)
+        self.conductors = tuple(conductors)
+        self.samples = int(samples)
+        self.regularization = float(regularization)
+        self._unit_source = self._coil_source()
+        self.conductivity, self.conductor_edges = self._edge_conductivity(conductivity)
+        self.edge_conductance = self.conductivity * grid.dual_areas / grid.edge_lengths
+        self.impedance_conductors = tuple(impedance_conductors)
+        self.cut_cells = bool(cut_cells)
+        if not 0.0 < min_air_fraction <= 1.0:
+            raise ValueError("min_air_fraction must be in (0, 1]")
+        self.min_air_fraction = float(min_air_fraction)
+        self._surfaces = [
+            cut_cells_of(grid, c.shapes, min_sine=min_sine)
+            if self.cut_cells
+            else staircased_cells(grid, c.shapes)
+            for c in self.impedance_conductors
+        ]
+        metal_edges = sum((1.0 - c.edge_air for c in self._surfaces), np.zeros(1))
+        metal_faces = sum((1.0 - c.face_air for c in self._surfaces), np.zeros(1))
+        #: The fraction of every edge's length outside the impedance conductors.
+        self.edge_air = np.clip(1.0 - metal_edges, 0.0, 1.0) * np.ones(grid.n_edges)
+        #: The fraction of every face's area outside the impedance conductors.
+        self.face_air = np.clip(1.0 - metal_faces, 0.0, 1.0) * np.ones(grid.n_faces)
+        #: The unknowns: the free edges not entirely inside an impedance conductor.
+        self.free_edges = grid.free_edges & (self.edge_air > 0.0)
+        volume = np.zeros(grid.n_edges, dtype=bool)
+        for name, edges in self.conductor_edges.items():
+            if name != "background":
+                volume |= edges
+        if np.any(volume & (self.edge_air < 1.0)):
+            raise ValueError("volume conductors must not touch impedance conductors")
+        self._factorizations: dict[float, Any] = {}
+        self._preconditioners: dict[float, Any] = {}
+        self._order: np.ndarray | None = None
+
     # --- the operator ----------------------------------------------------------------
 
     def face_field_factor(self, frequency: float | None = None) -> np.ndarray:
@@ -478,6 +478,17 @@ class InductiveField3D:
             )
         return losses
 
+    def _gauge(self) -> np.ndarray:
+        grid = self.grid
+        size = float(np.max(grid.upper - grid.lower))
+        return (
+            self.regularization / (MU_0 * size**2) * grid.dual_areas / grid.edge_lengths
+        )
+
+    def _edge_term(self, omega: float) -> np.ndarray:
+        """The diagonal edge term: the conductance's and the gauge's."""
+        return 1j * omega * self.edge_conductance + self._gauge()
+
     def matrix(self, frequency: float | None = None) -> sp.csr_matrix:
         """The full operator on all edges (Dirichlet edges included), symmetric."""
         grid = self.grid
@@ -489,17 +500,6 @@ class InductiveField3D:
             @ curl
         )
         return (stiffness + sp.diags(self._edge_term(omega))).tocsr()
-
-    def _gauge(self) -> np.ndarray:
-        grid = self.grid
-        size = float(np.max(grid.upper - grid.lower))
-        return (
-            self.regularization / (MU_0 * size**2) * grid.dual_areas / grid.edge_lengths
-        )
-
-    def _edge_term(self, omega: float) -> np.ndarray:
-        """The diagonal edge term: the conductance's and the gauge's."""
-        return 1j * omega * self.edge_conductance + self._gauge()
 
     def _preconditioned(self, frequency: float):
         """The free edges' matrix and its auxiliary-space preconditioner."""

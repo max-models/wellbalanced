@@ -321,6 +321,14 @@ def side_wall_driver(driver: RFDriver, h_factor: float) -> RFDriver:
     return SideWall(**fields)
 
 
+def _coil(driver):
+    simgeometry = pytest.importorskip("simgeometry")
+    return Winding(
+        simgeometry.Rectangle((driver.coil_radius, driver.length / 2), (0.004, 1.0)),
+        sign=driver.coil_turns,
+    )
+
+
 def test_the_lorentz_force_pushes_the_electrons_off_the_coil(driver) -> None:
     grid, plasma = column(driver)
     field = InductiveField2D(
@@ -340,14 +348,6 @@ def test_the_lorentz_force_pushes_the_electrons_off_the_coil(driver) -> None:
     j_x_b = 0.5 * np.real(solution.plasma_current_density * np.conj(b_z))
     assert force_r * solution.electron_density == pytest.approx(
         j_x_b, rel=1e-9, abs=1e-12
-    )
-
-
-def _coil(driver):
-    simgeometry = pytest.importorskip("simgeometry")
-    return Winding(
-        simgeometry.Rectangle((driver.coil_radius, driver.length / 2), (0.004, 1.0)),
-        sign=driver.coil_turns,
     )
 
 

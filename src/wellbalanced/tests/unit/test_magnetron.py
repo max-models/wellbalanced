@@ -213,6 +213,15 @@ def test_a_pulse_reaches_a_periodic_state() -> None:
     assert float(data.electron_temperature.min()) >= gas_ev * (1.0 - 1.0e-6)
 
 
+def _first_state(magnetron: Magnetron, data) -> dict[str, float]:
+    """The densities at the start of a pulse dataset, as an initial guess."""
+    start = data.isel(t=0)
+    densities = {
+        str(s): float(start.density.sel(species=s)) for s in data.species.values
+    }
+    return {**densities, "Te": float(start.electron_temperature)}
+
+
 def test_a_pulse_restarted_from_its_periodic_state_stays_periodic() -> None:
     magnetron = Magnetron(wind_efficiency=0.3).calibrate_heating(2.0, 500.0)
     kwargs = {"periods": 12, "points": 40, "tolerance": 1.0e-4}
@@ -222,15 +231,6 @@ def test_a_pulse_restarted_from_its_periodic_state_stays_periodic() -> None:
     )
     assert again.attrs["periods"] <= 2
     np.testing.assert_allclose(again.I_D.values, first.I_D.values, rtol=2.0e-2)
-
-
-def _first_state(magnetron: Magnetron, data) -> dict[str, float]:
-    """The densities at the start of a pulse dataset, as an initial guess."""
-    start = data.isel(t=0)
-    densities = {
-        str(s): float(start.density.sel(species=s)) for s in data.species.values
-    }
-    return {**densities, "Te": float(start.electron_temperature)}
 
 
 def test_a_dc_scan_continues_from_state_to_state() -> None:

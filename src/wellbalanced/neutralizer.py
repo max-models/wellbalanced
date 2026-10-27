@@ -187,6 +187,13 @@ class BeamData:
             raise ValueError("secondary energies must be >= 0")
 
 
+def _evaluate(sigma: float | CrossSectionFunction, energy: float) -> float:
+    """A cross section (m^2) at the beam energy (eV): a number, or a function of it."""
+    if callable(sigma):
+        return float(np.asarray(sigma(np.array([energy]))).reshape(-1)[0])
+    return float(sigma)
+
+
 @dataclass(frozen=True)
 class BeamCrossSections:
     """The beam's cross sections as functions of its energy; :meth:`at` gives :class:`BeamData`.
@@ -230,13 +237,6 @@ class BeamCrossSections:
             ionization,
             secondaries,
         )
-
-
-def _evaluate(sigma: float | CrossSectionFunction, energy: float) -> float:
-    """A cross section (m^2) at the beam energy (eV): a number, or a function of it."""
-    if callable(sigma):
-        return float(np.asarray(sigma(np.array([energy]))).reshape(-1)[0])
-    return float(sigma)
 
 
 @dataclass(frozen=True)
@@ -938,6 +938,11 @@ class Neutralizer:
         return results
 
 
+def _arrhenius(a: float, c: float):
+    """``K = a exp(-c / T)`` (m^3/s, T in eV), a placeholder rate."""
+    return lambda t: a * np.exp(-c / np.asarray(t, dtype=float))
+
+
 def illustrative_deuterium_neutralizer(**overrides: Any) -> Neutralizer:
     """A deuterium neutralizer channel with illustrative numbers, not data.
 
@@ -1002,8 +1007,3 @@ def illustrative_deuterium_neutralizer(**overrides: Any) -> Neutralizer:
         "ion_wall_products": {"D2+": {"D2": 1}, "D+": {"D": 1}},
     }
     return Neutralizer(**{**defaults, **overrides})
-
-
-def _arrhenius(a: float, c: float):
-    """``K = a exp(-c / T)`` (m^3/s, T in eV), a placeholder rate."""
-    return lambda t: a * np.exp(-c / np.asarray(t, dtype=float))

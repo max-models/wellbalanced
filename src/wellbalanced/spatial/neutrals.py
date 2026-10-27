@@ -425,6 +425,17 @@ class NeutralState:
         )
 
 
+def _factorized(matrix: sp.csc_matrix):
+    """The sparse LU of a Jacobian, or ``None`` if it is singular or not finite."""
+    matrix = sp.csc_matrix(matrix)
+    if not np.all(np.isfinite(matrix.data)):
+        return None
+    try:
+        return spla.splu(matrix)
+    except RuntimeError:
+        return None
+
+
 class NeutralFluid2D:
     """The neutral gas on the cells of a grid; see the module docstring.
 
@@ -453,127 +464,8 @@ class NeutralFluid2D:
             background gas that only collides.
     """
 
-    def __init__(
-        self,
-        grid: CellGrid | PatchGrid,
-        species: Sequence[NeutralSpecies],
-        reactions: Sequence[Reaction] = (),
-        *,
-        region: PlasmaRegion | np.ndarray | None = None,
-        plasma_species: Sequence[Species] = (),
-        collisions: Sequence[Collision] = (),
-        wall_reactions: Sequence[WallReaction] = (),
-        ion_wall_products: Mapping[str, Mapping[str, float]] | None = None,
-        wall_temperature: float = ROOM_TEMPERATURE,
-        accommodation: float | Mapping[str, float] = 1.0,
-        openings: Sequence[Opening] = (),
-        inlets: Sequence[Inlet] = (),
-        fixed: Mapping[str, CellField] | None = None,
-    ) -> None:
-        """Index the cells, faces, walls and unknowns; check the names."""
-        self.grid = grid
-        self.species = tuple(species)
-        names = [s.name for s in self.species]
-        if not names:
-            raise ValueError("the model needs a neutral species")
-        if len(set(names)) != len(names):
-            raise ValueError("species names must be unique")
-        if wall_temperature <= 0.0:
-            raise ValueError("the wall temperature must be > 0")
-        self.wall_temperature = float(wall_temperature)
-        self._by_name = {s.name: s for s in self.species}
-        self._plasma_species = {s.name: s for s in plasma_species}
-        overlap = set(names) & set(self._plasma_species)
-        if overlap:
-            raise ValueError(f"species both neutral and plasma: {sorted(overlap)}")
-        fixed = dict(fixed or {})
-        known = set(names) | set(self._plasma_species) | set(fixed)
-        self.reactions = tuple(
-            r for r in reactions if set(names) & (set(r.reactants) | set(r.products))
-        )
-        for reaction in self.reactions:
-            unknown = (set(reaction.reactants) | set(reaction.products)) - known
-            if unknown:
-                raise ValueError(f"{reaction.name}: unknown species {sorted(unknown)}")
-        self.collisions = tuple(collisions)
-        for collision in self.collisions:
-            if collision.species not in self._by_name:
-                raise ValueError(f"{collision.name}: {collision.species} is no neutral")
-            if collision.partner not in known:
-                raise ValueError(
-                    f"{collision.name}: unknown partner {collision.partner}"
-                )
-        self.wall_reactions = tuple(wall_reactions)
-        for wall in self.wall_reactions:
-            if wall.species not in self._by_name:
-                raise ValueError(f"wall reaction: {wall.species} is no neutral")
-            if set(wall.products) - set(names):
-                raise ValueError("wall reactions must return neutrals of the model")
-        lost = dict.fromkeys(names, 0.0)
-        for wall in self.wall_reactions:
-            lost[wall.species] += wall.probability
-        if any(p > 1.0 for p in lost.values()):
-            raise ValueError("the wall probabilities of a species add up to > 1")
-        self._reflected = {name: 1.0 - p for name, p in lost.items()}
-        self.ion_wall_products = {
-            ion: dict(products) for ion, products in (ion_wall_products or {}).items()
-        }
-        for ion, products in self.ion_wall_products.items():
-            if ion not in self._plasma_species:
-                raise ValueError(f"ion wall products: {ion} is no plasma species")
-            if set(products) - set(names):
-                raise ValueError("ions must come back as neutrals of the model")
-        if isinstance(accommodation, Mapping):
-            self.accommodation = {n: float(accommodation.get(n, 1.0)) for n in names}
-        else:
-            self.accommodation = dict.fromkeys(names, float(accommodation))
-        if any(not 0.0 <= a <= 1.0 for a in self.accommodation.values()):
-            raise ValueError("an accommodation coefficient must be in [0, 1]")
-        for inlet in inlets:
-            if inlet.species not in self._by_name:
-                raise ValueError(f"{inlet.name}: {inlet.species} is no neutral")
-        self.openings = tuple(openings)
-        self.inlets = tuple(inlets)
-
-        # the cells and faces
-        if region is None:
-            mask = np.ones(grid.shape, dtype=bool)
-        elif isinstance(region, PlasmaRegion):
-            mask = region.mask(grid)
-        else:
-            mask = np.asarray(region, dtype=bool).reshape(grid.shape)
-        if not mask.any():
-            raise ValueError("the region covers no cell")
-        self.region = mask
-        self.cells = np.flatnonzero(mask.ravel())
-        self.size = self.cells.size
-        self.volumes = grid.cell_volumes.ravel()[self.cells]
-        self._faces(grid)
-        self._boundaries()
-        self._radius = (
-            np.asarray(grid.xx).ravel()[self.cells][:, None]
-            if grid.cylindrical
-            else None
-        )
-        self._length = float(np.sqrt(np.sum(grid.cell_areas.ravel()[self.cells])))
-
-        # the unknowns per cell and species: log n, u_1, u_2, log T
-        self._nvar = 4 * len(self.species)
-        self._is_log = np.zeros(self._nvar, dtype=bool)
-        self._is_log[0::4] = True
-        self._is_log[3::4] = True
-        self._fixed = {n: self._on_cells(v)[:, None] for n, v in fixed.items()}
-        self._pairs = self._collision_pairs()
-        self.set_plasma({}, 0.0)
-        self._colours = self._colouring()
-        self._scales: dict[str, Any] | None = None
-        #: Newton's tolerance of a velocity is relative to this speed [m/s]: the
-        #: thermal speed of the lightest species at the wall temperature.
-        self._velocity_scale = min(
-            float(np.sqrt(2.0 * E * self.wall_temperature / s.mass))
-            for s in self.species
-        )
-        self._iterations = 0
+    #: The largest batch of states the Jacobian evaluates at once (in numbers).
+    BATCH_SIZE = 4_000_000
 
     # --- geometry --------------------------------------------------------------------
 
@@ -713,25 +605,6 @@ class NeutralFluid2D:
                 return array.astype(float)
         return self.grid.cell_field(value).ravel()[self.cells]
 
-    def on_grid(self, values: np.ndarray, outside: float = 0.0) -> np.ndarray:
-        """Values on the region's cells as a field over the grid, ``outside`` elsewhere."""
-        values = np.asarray(values).reshape(self.size)
-        result = np.full(self.grid.size, outside, dtype=values.dtype)
-        result[self.cells] = values
-        return result.reshape(self.grid.shape)
-
-    def _gradient(self, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """The gradient on the cells (a batch ``(cells, B)``) from the interior faces."""
-        face = (values[self._high] - values[self._low]) / self._d
-        return self._grad[0] @ face, self._grad[1] @ face
-
-    def _divergence(self, interior: np.ndarray, walls: np.ndarray | None) -> np.ndarray:
-        """``div F`` on the cells from the face fluxes (outward at the walls)."""
-        out = self._div_interior @ interior
-        if walls is not None:
-            out = out + self._div_wall @ walls
-        return out
-
     def _colouring(self) -> np.ndarray:
         """A colouring of the cells for the Jacobian; the residual reaches two cells.
 
@@ -756,6 +629,164 @@ class NeutralFluid2D:
             colours[cell] = colour
         self._reach = reach.tocoo()
         return colours
+
+    # --- the collisions and reactions ------------------------------------------------
+
+    def _collision_pairs(self) -> list[dict[str, Any]]:
+        """The collisions with their masses and the kind of partner."""
+        pairs = []
+        for c in self.collisions:
+            m = self._by_name[c.species].mass
+            if c.partner in self._by_name:
+                kind, mj = "neutral", self._by_name[c.partner].mass
+            elif c.partner in self._fixed:  # at rest; its mass if listed, else m
+                listed = self._plasma_species.get(c.partner)
+                kind, mj = "fixed", m if listed is None else listed.mass
+            else:
+                kind, mj = "plasma", self._plasma_species[c.partner].mass
+            pairs.append({"collision": c, "kind": kind, "mass": m, "partner_mass": mj})
+        return pairs
+
+    def __init__(
+        self,
+        grid: CellGrid | PatchGrid,
+        species: Sequence[NeutralSpecies],
+        reactions: Sequence[Reaction] = (),
+        *,
+        region: PlasmaRegion | np.ndarray | None = None,
+        plasma_species: Sequence[Species] = (),
+        collisions: Sequence[Collision] = (),
+        wall_reactions: Sequence[WallReaction] = (),
+        ion_wall_products: Mapping[str, Mapping[str, float]] | None = None,
+        wall_temperature: float = ROOM_TEMPERATURE,
+        accommodation: float | Mapping[str, float] = 1.0,
+        openings: Sequence[Opening] = (),
+        inlets: Sequence[Inlet] = (),
+        fixed: Mapping[str, CellField] | None = None,
+    ) -> None:
+        """Index the cells, faces, walls and unknowns; check the names."""
+        self.grid = grid
+        self.species = tuple(species)
+        names = [s.name for s in self.species]
+        if not names:
+            raise ValueError("the model needs a neutral species")
+        if len(set(names)) != len(names):
+            raise ValueError("species names must be unique")
+        if wall_temperature <= 0.0:
+            raise ValueError("the wall temperature must be > 0")
+        self.wall_temperature = float(wall_temperature)
+        self._by_name = {s.name: s for s in self.species}
+        self._plasma_species = {s.name: s for s in plasma_species}
+        overlap = set(names) & set(self._plasma_species)
+        if overlap:
+            raise ValueError(f"species both neutral and plasma: {sorted(overlap)}")
+        fixed = dict(fixed or {})
+        known = set(names) | set(self._plasma_species) | set(fixed)
+        self.reactions = tuple(
+            r for r in reactions if set(names) & (set(r.reactants) | set(r.products))
+        )
+        for reaction in self.reactions:
+            unknown = (set(reaction.reactants) | set(reaction.products)) - known
+            if unknown:
+                raise ValueError(f"{reaction.name}: unknown species {sorted(unknown)}")
+        self.collisions = tuple(collisions)
+        for collision in self.collisions:
+            if collision.species not in self._by_name:
+                raise ValueError(f"{collision.name}: {collision.species} is no neutral")
+            if collision.partner not in known:
+                raise ValueError(
+                    f"{collision.name}: unknown partner {collision.partner}"
+                )
+        self.wall_reactions = tuple(wall_reactions)
+        for wall in self.wall_reactions:
+            if wall.species not in self._by_name:
+                raise ValueError(f"wall reaction: {wall.species} is no neutral")
+            if set(wall.products) - set(names):
+                raise ValueError("wall reactions must return neutrals of the model")
+        lost = dict.fromkeys(names, 0.0)
+        for wall in self.wall_reactions:
+            lost[wall.species] += wall.probability
+        if any(p > 1.0 for p in lost.values()):
+            raise ValueError("the wall probabilities of a species add up to > 1")
+        self._reflected = {name: 1.0 - p for name, p in lost.items()}
+        self.ion_wall_products = {
+            ion: dict(products) for ion, products in (ion_wall_products or {}).items()
+        }
+        for ion, products in self.ion_wall_products.items():
+            if ion not in self._plasma_species:
+                raise ValueError(f"ion wall products: {ion} is no plasma species")
+            if set(products) - set(names):
+                raise ValueError("ions must come back as neutrals of the model")
+        if isinstance(accommodation, Mapping):
+            self.accommodation = {n: float(accommodation.get(n, 1.0)) for n in names}
+        else:
+            self.accommodation = dict.fromkeys(names, float(accommodation))
+        if any(not 0.0 <= a <= 1.0 for a in self.accommodation.values()):
+            raise ValueError("an accommodation coefficient must be in [0, 1]")
+        for inlet in inlets:
+            if inlet.species not in self._by_name:
+                raise ValueError(f"{inlet.name}: {inlet.species} is no neutral")
+        self.openings = tuple(openings)
+        self.inlets = tuple(inlets)
+
+        # the cells and faces
+        if region is None:
+            mask = np.ones(grid.shape, dtype=bool)
+        elif isinstance(region, PlasmaRegion):
+            mask = region.mask(grid)
+        else:
+            mask = np.asarray(region, dtype=bool).reshape(grid.shape)
+        if not mask.any():
+            raise ValueError("the region covers no cell")
+        self.region = mask
+        self.cells = np.flatnonzero(mask.ravel())
+        self.size = self.cells.size
+        self.volumes = grid.cell_volumes.ravel()[self.cells]
+        self._faces(grid)
+        self._boundaries()
+        self._radius = (
+            np.asarray(grid.xx).ravel()[self.cells][:, None]
+            if grid.cylindrical
+            else None
+        )
+        self._length = float(np.sqrt(np.sum(grid.cell_areas.ravel()[self.cells])))
+
+        # the unknowns per cell and species: log n, u_1, u_2, log T
+        self._nvar = 4 * len(self.species)
+        self._is_log = np.zeros(self._nvar, dtype=bool)
+        self._is_log[0::4] = True
+        self._is_log[3::4] = True
+        self._fixed = {n: self._on_cells(v)[:, None] for n, v in fixed.items()}
+        self._pairs = self._collision_pairs()
+        self.set_plasma({}, 0.0)
+        self._colours = self._colouring()
+        self._scales: dict[str, Any] | None = None
+        #: Newton's tolerance of a velocity is relative to this speed [m/s]: the
+        #: thermal speed of the lightest species at the wall temperature.
+        self._velocity_scale = min(
+            float(np.sqrt(2.0 * E * self.wall_temperature / s.mass))
+            for s in self.species
+        )
+        self._iterations = 0
+
+    def on_grid(self, values: np.ndarray, outside: float = 0.0) -> np.ndarray:
+        """Values on the region's cells as a field over the grid, ``outside`` elsewhere."""
+        values = np.asarray(values).reshape(self.size)
+        result = np.full(self.grid.size, outside, dtype=values.dtype)
+        result[self.cells] = values
+        return result.reshape(self.grid.shape)
+
+    def _gradient(self, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """The gradient on the cells (a batch ``(cells, B)``) from the interior faces."""
+        face = (values[self._high] - values[self._low]) / self._d
+        return self._grad[0] @ face, self._grad[1] @ face
+
+    def _divergence(self, interior: np.ndarray, walls: np.ndarray | None) -> np.ndarray:
+        """``div F`` on the cells from the face fluxes (outward at the walls)."""
+        out = self._div_interior @ interior
+        if walls is not None:
+            out = out + self._div_wall @ walls
+        return out
 
     # --- the plasma ------------------------------------------------------------------
 
@@ -893,23 +924,6 @@ class NeutralFluid2D:
             temperatures[s.name] = np.exp(np.clip(u[:, 4 * k + 3], -50.0, 50.0))
         return densities, velocities, temperatures
 
-    # --- the collisions and reactions ------------------------------------------------
-
-    def _collision_pairs(self) -> list[dict[str, Any]]:
-        """The collisions with their masses and the kind of partner."""
-        pairs = []
-        for c in self.collisions:
-            m = self._by_name[c.species].mass
-            if c.partner in self._by_name:
-                kind, mj = "neutral", self._by_name[c.partner].mass
-            elif c.partner in self._fixed:  # at rest; its mass if listed, else m
-                listed = self._plasma_species.get(c.partner)
-                kind, mj = "fixed", m if listed is None else listed.mass
-            else:
-                kind, mj = "plasma", self._plasma_species[c.partner].mass
-            pairs.append({"collision": c, "kind": kind, "mass": m, "partner_mass": mj})
-        return pairs
-
     def _partner(self, name, densities, velocities, temperatures):
         """Density, velocity and temperature of any species on the cells."""
         if name in densities:
@@ -966,6 +980,13 @@ class NeutralFluid2D:
                 force[other][1] += rate * du[1]
                 power[other] += rate / (m + mj) * (3.0 * (t - tj) + m * du2 / E)
         return force, power, denominator, friction
+
+    def _mass(self, name: str) -> float:
+        if name in self._by_name:
+            return self._by_name[name].mass
+        if name in self._plasma_species:
+            return self._plasma_species[name].mass
+        return 0.0  # a fixed gas: no velocity, no weight in the centre of mass
 
     def _reactions(self, densities, velocities, temperatures, batch: int):
         """The reactions' rates and their sources of particles, momentum and energy.
@@ -1033,13 +1054,6 @@ class NeutralFluid2D:
                 for name in receivers:
                     energy[name] += heat / len(receivers)
         return rates, particles, momentum, energy
-
-    def _mass(self, name: str) -> float:
-        if name in self._by_name:
-            return self._by_name[name].mass
-        if name in self._plasma_species:
-            return self._plasma_species[name].mass
-        return 0.0  # a fixed gas: no velocity, no weight in the centre of mass
 
     # --- the walls -------------------------------------------------------------------
 
@@ -1176,6 +1190,20 @@ class NeutralFluid2D:
             "wall_back": back,
         }
 
+    def _scale(self, unknowns: np.ndarray) -> dict[str, Any]:
+        """The scales of the residuals: the largest density, ``n T`` and pressure.
+
+        Held fixed through a Newton solve (:meth:`_newton`): scales that moved with the
+        unknowns would enter the finite-difference Jacobian.
+        """
+        densities, _, temperatures = self._unpack(np.asarray(unknowns).reshape(-1))
+        nt = {n: float(np.max(densities[n] * temperatures[n])) for n in densities}
+        return {
+            "density": {n: max(float(np.max(v)), 1.0) for n, v in densities.items()},
+            "energy": {n: max(v, 1e-300) for n, v in nt.items()},
+            "pressure": max(max(nt.values()) * E, 1e-300),
+        }
+
     def _residual(
         self, unknowns: np.ndarray, previous: np.ndarray | None, dt: float
     ) -> np.ndarray:
@@ -1230,23 +1258,6 @@ class NeutralFluid2D:
             return res.ravel()
         return res.reshape(self.size * self._nvar, batch)
 
-    def _scale(self, unknowns: np.ndarray) -> dict[str, Any]:
-        """The scales of the residuals: the largest density, ``n T`` and pressure.
-
-        Held fixed through a Newton solve (:meth:`_newton`): scales that moved with the
-        unknowns would enter the finite-difference Jacobian.
-        """
-        densities, _, temperatures = self._unpack(np.asarray(unknowns).reshape(-1))
-        nt = {n: float(np.max(densities[n] * temperatures[n])) for n in densities}
-        return {
-            "density": {n: max(float(np.max(v)), 1.0) for n, v in densities.items()},
-            "energy": {n: max(v, 1e-300) for n, v in nt.items()},
-            "pressure": max(max(nt.values()) * E, 1e-300),
-        }
-
-    #: The largest batch of states the Jacobian evaluates at once (in numbers).
-    BATCH_SIZE = 4_000_000
-
     def _jacobian(self, unknowns: np.ndarray, previous, dt) -> sp.csc_matrix:
         """The Jacobian by finite differences: one column per colour and unknown.
 
@@ -1292,6 +1303,22 @@ class NeutralFluid2D:
             shape=(size, size),
         )
 
+    def _damping(self, u: np.ndarray, delta: np.ndarray, is_log: np.ndarray) -> float:
+        """The fraction of a Newton step: logarithms and velocities change by a little."""
+        fraction = 1.0
+        largest = float(np.max(np.abs(delta[is_log])))
+        if largest > MAX_LOG_STEP:
+            fraction = MAX_LOG_STEP / largest
+        _, _, temperatures = self._unpack(u)
+        speed = max(
+            float(np.sqrt(2.0 * E * np.max(temperatures[s.name]) / s.mass))
+            for s in self.species
+        )
+        velocity = float(np.max(np.abs(delta[~is_log])))
+        if velocity > MAX_VELOCITY_STEP * speed:
+            fraction = min(fraction, MAX_VELOCITY_STEP * speed / velocity)
+        return fraction
+
     @profile("wellbalanced.NeutralFluid2D.newton", tags=_PROFILE_TAGS)
     def _newton(self, unknowns, previous, dt, max_iterations: int | None = None):
         """Solve the (backward Euler or steady) equations; return the solution and success.
@@ -1335,22 +1362,6 @@ class NeutralFluid2D:
             return u, False
         finally:
             self._scales = None
-
-    def _damping(self, u: np.ndarray, delta: np.ndarray, is_log: np.ndarray) -> float:
-        """The fraction of a Newton step: logarithms and velocities change by a little."""
-        fraction = 1.0
-        largest = float(np.max(np.abs(delta[is_log])))
-        if largest > MAX_LOG_STEP:
-            fraction = MAX_LOG_STEP / largest
-        _, _, temperatures = self._unpack(u)
-        speed = max(
-            float(np.sqrt(2.0 * E * np.max(temperatures[s.name]) / s.mass))
-            for s in self.species
-        )
-        velocity = float(np.max(np.abs(delta[~is_log])))
-        if velocity > MAX_VELOCITY_STEP * speed:
-            fraction = min(fraction, MAX_VELOCITY_STEP * speed / velocity)
-        return fraction
 
     # --- running ---------------------------------------------------------------------
 
@@ -1519,17 +1530,6 @@ class NeutralFluid2D:
             "sign": self._wall_sign,
             "area": self._wall_area,
         }
-
-
-def _factorized(matrix: sp.csc_matrix):
-    """The sparse LU of a Jacobian, or ``None`` if it is singular or not finite."""
-    matrix = sp.csc_matrix(matrix)
-    if not np.all(np.isfinite(matrix.data)):
-        return None
-    try:
-        return spla.splu(matrix)
-    except RuntimeError:
-        return None
 
 
 # --- coupling to the plasma ------------------------------------------------------------

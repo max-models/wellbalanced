@@ -247,6 +247,19 @@ TITANIUM = MATERIALS["Ti"]
 COPPER = MATERIALS["Cu"]
 
 
+def pulse(
+    on: float, on_time: float, period: float, off: float = 0.0
+) -> Callable[[float], float]:
+    """A rectangular waveform: ``on`` for ``on_time`` of every ``period``, else ``off``."""
+    if not 0.0 < on_time < period:
+        raise ValueError("on_time must be in (0, period)")
+
+    def waveform(t: float) -> float:
+        return on if (t % period) < on_time else off
+
+    return waveform
+
+
 @dataclass(frozen=True)
 class Magnetron:
     """The ionization region of a magnetron: geometry, gas and target; see the module docstring.
@@ -614,6 +627,30 @@ class Magnetron:
         total = state.densities[metal] + state.densities[metal_ion]
         return state.densities[metal_ion] / total
 
+    def _series(self, states: list[GlobalState], times: np.ndarray) -> xr.Dataset:
+        """The time series of a list of states as a dataset."""
+        data = stack(states, "t", times, long_name="time in the period", units="s")
+        columns = [self.target_currents(state) for state in states]
+        for key, long_name, units in (
+            ("I_D", "discharge current", "A"),
+            ("sputtered", "sputtered atoms", "s^-1"),
+            ("metal_ion_fraction", "metal fraction of the ion flux", ""),
+        ):
+            data[key] = variable("t", [c[key] for c in columns], long_name, units)
+        diagnostics = [self.diagnostics(state) for state in states]
+        for key, long_name in (
+            ("rarefaction", "argon density over the filling density"),
+            ("self_sputtering_share", "self-sputtering share of the sputtered flux"),
+            ("metal_to_argon", "neutral metal over argon density"),
+        ):
+            data[key] = variable("t", [d[key] for d in diagnostics], long_name)
+        data["metal_ionization"] = variable(
+            "t",
+            [self.metal_ionization(state) for state in states],
+            "ionized fraction of the metal",
+        )
+        return data
+
     # -- pulses -----------------------------------------------------------------------
 
     def pulse(
@@ -668,30 +705,6 @@ class Magnetron:
         data = self._series(states, times)
         data.attrs.update(
             periodicity_error=float(error), periods=run, on_time=on_time, period=period
-        )
-        return data
-
-    def _series(self, states: list[GlobalState], times: np.ndarray) -> xr.Dataset:
-        """The time series of a list of states as a dataset."""
-        data = stack(states, "t", times, long_name="time in the period", units="s")
-        columns = [self.target_currents(state) for state in states]
-        for key, long_name, units in (
-            ("I_D", "discharge current", "A"),
-            ("sputtered", "sputtered atoms", "s^-1"),
-            ("metal_ion_fraction", "metal fraction of the ion flux", ""),
-        ):
-            data[key] = variable("t", [c[key] for c in columns], long_name, units)
-        diagnostics = [self.diagnostics(state) for state in states]
-        for key, long_name in (
-            ("rarefaction", "argon density over the filling density"),
-            ("self_sputtering_share", "self-sputtering share of the sputtered flux"),
-            ("metal_to_argon", "neutral metal over argon density"),
-        ):
-            data[key] = variable("t", [d[key] for d in diagnostics], long_name)
-        data["metal_ionization"] = variable(
-            "t",
-            [self.metal_ionization(state) for state in states],
-            "ionized fraction of the metal",
         )
         return data
 
@@ -750,16 +763,3 @@ class Magnetron:
             states.append(state)
             previous = state
         return states
-
-
-def pulse(
-    on: float, on_time: float, period: float, off: float = 0.0
-) -> Callable[[float], float]:
-    """A rectangular waveform: ``on`` for ``on_time`` of every ``period``, else ``off``."""
-    if not 0.0 < on_time < period:
-        raise ValueError("on_time must be in (0, period)")
-
-    def waveform(t: float) -> float:
-        return on if (t % period) < on_time else off
-
-    return waveform

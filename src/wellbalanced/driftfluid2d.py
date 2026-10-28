@@ -1195,7 +1195,7 @@ class DriftFluid2D:
             emitted = np.full_like(ion_flux, self.cathode_current_density / E)
         else:
             emitted = -self.secondary_emission * ion_flux
-        if not self.cathode_absorbs or ne is None:
+        if not self.cathode_absorbs or ne is None or te is None or gas is None:
             return emitted
         gas_xf, gas_yf = self._face_gas(gas)
         (mu_xf, h_xf), _ = self._collisions(gas_xf, gas_yf)

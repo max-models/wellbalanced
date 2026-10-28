@@ -7,6 +7,13 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `DriftFluid2D(anode_sheath=True)`: the anode takes the thermal flux of a full Maxwellian,
+  `n v_bar / 4`, behind the Boltzmann factor of the potential drop over the half cell next to
+  it (the saturation flux where the anode sits above the plasma, as in a magnetron), and
+  `cathode_absorbs=True`: the cathode also takes the electrons the field drives back into it.
+  In Boeuf's case the absorbing anode gives his anode-side gradient (L_n -1.6 mm) but drains
+  the anode region, and the discharge then runs away at the cathode (a potential well below
+  the cathode's potential holding magnetised electrons), absorbing cathode or not.
 - `boeuf_dispersion_roots` (`wellbalanced.driftfluid2d`): Boeuf's local gradient-drift
   relation, Eq. (1) of arXiv:2211.17051 (finite Larmor radius, grad-B drift, Poisson),
   checked against his linear phase (1e7 /s at 1.6 cm, +17 km/s). The linear stability of the

@@ -374,3 +374,45 @@ def test_an_outflow_takes_its_speed_times_the_density(momentum: bool) -> None:
     assert states[500.0].densities["Ar+"][-1] == pytest.approx(
         2.0 * states[1000.0].densities["Ar+"][-1], rel=1e-6
     )
+
+
+def test_an_outflow_takes_its_energy_factor_times_the_temperature() -> None:
+    """Heated electrons leave through an outflow with ``f T_e`` each.
+
+    Between a symmetry plane and the outflow, the heating and the field's work leave
+    through it alone: a larger factor, a colder plasma.
+    """
+    length, source, speed, heating = 0.02, 1.0e20, 1.0e4, 100.0
+    temperatures = {}
+    for factor in (2.0, 3.0):
+        model = plasma(
+            length,
+            60,
+            species=[FluidSpecies(ELECTRON, 30.0), FluidSpecies(ION, 10.0)],
+            electron_temperature=None,
+            heating=heating,
+            sources={"e": source, "Ar+": source},
+            boundaries={
+                "left": {"e": Boundary.symmetry(), "Ar+": Boundary.symmetry()},
+                "right": {
+                    "e": Boundary.outflow(speed, factor),
+                    "Ar+": Boundary.outflow(speed),
+                },
+            },
+            potential={"left": PotentialBoundary.field(0.0)},
+        )
+        guess = np.full(model.cells, source * length / speed)
+        state = model.steady_state(model.pack({"e": guess, "Ar+": guess}, TE, 0.0))
+        assert state.converged
+        te, ne = state.electron_temperature[-1], state.densities["e"][-1]
+        assert state.fluxes["energy"][-1] == pytest.approx(
+            speed * ne * factor * te, rel=1e-10
+        )
+        balance = model.energy_balance(state)
+        assert sum(balance.values()) == pytest.approx(
+            0.0, abs=1e-6 * balance["heating"]
+        )
+        temperatures[factor] = te
+    assert temperatures[3.0] < 0.8 * temperatures[2.0]
+    with pytest.raises(ValueError, match="energy factor"):
+        Boundary.outflow(speed, 0.0)

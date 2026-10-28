@@ -85,7 +85,8 @@ mobility the ions are collisionless.
 
 Boundaries are set per species and end, and can be changed between steps:
 `model.set_boundary("left", "e", Boundary.flux(1e16))`; `Boundary.outflow(speed)` lets
-the flux out follow the density there, as a coupled PIC region hands it back. Resolve the Debye length with the
+the flux out follow the density there, as a coupled PIC region hands it back (`Boundary.outflow(speed, energy_factor)`
+also gives the energy each electron takes with it, in `T_e`). Resolve the Debye length with the
 cells: with an unresolved sheath Newton's method cannot take long implicit steps.
 
 ## A 2D driver plasma

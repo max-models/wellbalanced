@@ -184,7 +184,8 @@ class Boundary:
     :meth:`outflow`, :meth:`symmetry`. ``value`` is the density (m^-3), the flux into
     the domain (m^-2 s^-1) or the outflow speed (m/s); ``temperature`` (eV) the electron temperature of a
     prescribed electron density; ``reflection`` the wall's reflection
-    coefficient; ``thermal_share`` the share of ``v_th n`` a wall takes.
+    coefficient; ``thermal_share`` the share of ``v_th n`` a wall takes;
+    ``energy_factor`` the mean energy an electron takes through an outflow, in ``T_e``.
     """
 
     kind: str
@@ -192,6 +193,7 @@ class Boundary:
     temperature: float | None = None
     reflection: float = 0.0
     thermal_share: float = 0.5
+    energy_factor: float = 2.0
 
     @classmethod
     def wall(cls, reflection: float = 0.0, thermal_share: float = 0.5) -> Boundary:
@@ -219,16 +221,22 @@ class Boundary:
         return cls("flux", value, temperature)
 
     @classmethod
-    def outflow(cls, speed: float) -> Boundary:
+    def outflow(cls, speed: float, energy_factor: float = 2.0) -> Boundary:
         """An outflow at ``speed`` (m/s): the flux out of the domain is ``speed n``.
 
         ``n`` is the density of the cell next to the end. The fluid side of a
         fluid-PIC coupling with an overlap: the PIC's flux over its density at the
         end, so the flux follows the fluid's density there (a prescribed flux
         leaves the level of a plasma between a symmetry plane and the end free).
-        Electrons take ``2 T_e`` each with them.
+        Electrons take ``energy_factor T_e`` each with them, ``T_e`` of the cell next to
+        the end: ``2 T_e`` for a flux of Maxwellian electrons, the PIC's energy flux
+        over its particle flux and its temperature in a coupling. A factor, not an
+        energy, for the same reason as a speed, not a flux: a prescribed energy per
+        electron with a prescribed heating leaves the level of ``T_e`` free.
         """
-        return cls("outflow", speed)
+        if energy_factor <= 0.0:
+            raise ValueError("the energy factor of an outflow must be > 0")
+        return cls("outflow", speed, energy_factor=energy_factor)
 
     @classmethod
     def symmetry(cls) -> Boundary:
@@ -568,10 +576,9 @@ class Fluid1D:
         if condition.kind == "symmetry":
             return 0.0
         if condition.kind == "outflow":
-            # 2 T per electron: (4/3) speed w
-            return float(
-                outward * condition.value * n_cell * (4.0 / 3.0 if energy else 1.0)
-            )
+            # the energy: f T_e per electron, (2 f / 3) speed w
+            factor = 2.0 * condition.energy_factor / 3.0 if energy else 1.0
+            return float(outward * condition.value * factor * n_cell)
         if condition.kind == "flux":
             # value is into the domain
             flux = -outward * condition.value

@@ -54,6 +54,9 @@ optional-dependencies.test = [
 ]
 urls.Source = "https://github.com/max-models/wellbalanced"
 
+[project.entry-points."scope_profiler.opt_in_tags"]
+wellbalanced = "wellbalanced"
+
 [tool.setuptools]
 package-data."*" = [ "py.typed" ]
 packages.find.where = [ "src" ]

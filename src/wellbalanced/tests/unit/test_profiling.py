@@ -68,3 +68,17 @@ def test_a_warning_from_a_region_points_at_the_caller(enable_tags):
         model.steady_state(max_time=0.0)
     sp.finalize(verbose=False)
     assert record[0].filename == __file__
+
+
+def test_the_opt_in_tag_has_an_entry_point():
+    """``scope-profiler tags`` finds the tag through the package's entry point."""
+    from importlib.metadata import entry_points
+
+    from wellbalanced._profiling import _PROFILE_TAGS
+
+    found = {
+        entry_point.name: entry_point.value
+        for entry_point in entry_points(group="scope_profiler.opt_in_tags")
+    }
+    assert found.get("wellbalanced") == "wellbalanced"
+    assert "wellbalanced" in _PROFILE_TAGS

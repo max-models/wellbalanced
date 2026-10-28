@@ -756,6 +756,11 @@ class DriftFluid2D:
             ``field_bc`` (required) and a uniform ``B``: pure Fourier modes ``(k_x, k_y)``
             exist, which is what the local dispersion relation describes.
         bohm: ``alpha`` of the anomalous frequency ``alpha omega_ce / 16`` (0 off).
+        bohm_below: If given (T), the anomalous frequency acts only where the field is weak:
+            times ``1 / (1 + (B / bohm_below)^4)``. A diagnostic of the anode region, where the
+            electrons' Larmor radius reaches the gradient lengths (a few mm at a few mT) and
+            the classical cross-field transport of the fluid is too small; the cathode
+            region, where the confinement makes the discharge, keeps its classical value.
         external_sources: Volume sources added to the time derivative of an unknown
             (``"ne"``, ``"ni"``, ``"N"``, ``"vx"``, ``"vy"``, ``"w"``), numbers or arrays
             on the cells, per unit time. :meth:`stationary_sources` returns the ones
@@ -794,6 +799,7 @@ class DriftFluid2D:
     _rate_override: np.ndarray | None = field(default=None, repr=False)
     _lu: spla.SuperLU | None = field(default=None, repr=False)
     bohm: float = 0.0
+    bohm_below: float | None = None
     external_sources: dict[str, np.ndarray] = field(default_factory=dict)
 
     def _build_poisson_pattern(self) -> None:
@@ -1047,7 +1053,11 @@ class DriftFluid2D:
         )
 
     def _bohm_nu(self, omega):
-        return self.bohm * np.abs(omega) / 16.0
+        nu = self.bohm * np.abs(omega) / 16.0
+        if self.bohm_below is not None:
+            field = ELECTRON_MASS * np.abs(omega) / E
+            nu = nu / (1.0 + (field / self.bohm_below) ** 4)
+        return nu
 
     # -- transport coefficients -------------------------------------------------------
 

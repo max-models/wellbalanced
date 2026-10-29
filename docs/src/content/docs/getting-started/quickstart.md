@@ -193,3 +193,23 @@ print(result.line_density, result.neutral_fraction, result.plasma_potential)
 ```
 
 See the [API reference](/wellbalanced/api/wellbalanced/) for every class and function.
+
+## Rates from OpenCR
+
+The illustrative driver and neutralizer use placeholder rates. With the `cr` extra
+(`pip install "wellbalanced[cr]"`), `wellbalanced.cr` builds the hydrogen reactions from
+[OpenCR](https://max-models.github.io/opencr/)'s collisional-radiative models: the
+ionization and recombination of H through its excited levels, the ionization and
+dissociation of H₂ through its vibrational levels, the electron energy lost to radiation,
+and the H₂⁺/H₃⁺ chemistry. The effective rates depend on the electron density, so they are
+taken at one `electron_density` near the solution's:
+
+```python
+from wellbalanced.cr import deuterium_neutralizer, hydrogen_driver
+
+driver = hydrogen_driver(electron_density=1e18)  # the BUG driver with OpenCR's rates
+state = driver.solve(20e3)
+channel = (
+    deuterium_neutralizer()
+)  # the plasma rates from OpenCR; the beam data still placeholders
+```

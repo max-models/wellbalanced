@@ -2561,7 +2561,7 @@ wheels = [
 [[package]]
 name = "opencr"
 version = "0.1.0"
-source = { git = "https://github.com/max-models/opencr?branch=molecules-inference#c726fbea4a0391eff09aceaa040f5ae72e88d5f1" }
+source = { git = "https://github.com/max-models/opencr?branch=devel#f7ec2c38c3d6416e8af9de25030d99225f52d504" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
@@ -2897,7 +2897,7 @@ dependencies = [
 [[package]]
 name = "plasmacoll"
 version = "0.4.0"
-source = { git = "https://github.com/max-models/plasmacoll?branch=h2-highn#ae6322d59d81b1bcb6aa37d8137dcffef3ed103e" }
+source = { git = "https://github.com/max-models/plasmacoll?branch=devel#376813ae155a99a3d984549766f59dfb552c1970" }
 dependencies = [
     { name = "cunumpy" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -4269,13 +4269,13 @@ requires-dist = [
     { name = "nbclient", marker = "extra == 'docs'", specifier = ">=0.11" },
     { name = "nbformat", marker = "extra == 'docs'", specifier = ">=5.11.1" },
     { name = "numpy" },
-    { name = "opencr", marker = "extra == 'cr'", git = "https://github.com/max-models/opencr?branch=molecules-inference" },
-    { name = "opencr", marker = "extra == 'test'", git = "https://github.com/max-models/opencr?branch=molecules-inference" },
+    { name = "opencr", marker = "extra == 'cr'", git = "https://github.com/max-models/opencr?branch=devel" },
+    { name = "opencr", marker = "extra == 'test'", git = "https://github.com/max-models/opencr?branch=devel" },
     { name = "patchwork-amr", marker = "extra == 'docs'", git = "https://github.com/max-models/patchwork?branch=devel" },
     { name = "patchwork-amr", marker = "extra == 'spatial'", git = "https://github.com/max-models/patchwork?branch=devel" },
     { name = "patchwork-amr", marker = "extra == 'test'", git = "https://github.com/max-models/patchwork?branch=devel" },
     { name = "plasma-plots", marker = "extra == 'docs'", git = "https://github.com/max-models/plasma-plots?branch=devel" },
-    { name = "plasmacoll", git = "https://github.com/max-models/plasmacoll?branch=h2-highn" },
+    { name = "plasmacoll", git = "https://github.com/max-models/plasmacoll?branch=devel" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "pyproject-fmt", marker = "extra == 'dev'" },
     { name = "pyright", marker = "extra == 'dev'" },

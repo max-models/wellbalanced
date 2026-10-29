@@ -90,7 +90,7 @@ def _table(model: Any, densities: dict[str, float], electron_density: float, out
 
     conditions = opencr.Conditions(1.0, electron_density, densities=densities)
     table = effective_rate_table(
-        model, conditions, outputs, CR_TEMPERATURES, [electron_density]
+        model, conditions, outputs, CR_TEMPERATURES.tolist(), [electron_density]
     )
     return {name: table(name, CR_TEMPERATURES, electron_density) for name in outputs}
 

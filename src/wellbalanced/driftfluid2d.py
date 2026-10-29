@@ -740,6 +740,16 @@ class DriftFluid2D:
             outflow is then the larger of the two, and the density next to the anode falls to
             what carries the current. Tested for Boeuf's case without success: the 1D discharge
             then decays and runs away (no sheath barrier for the wall flux), so it is off.
+        cathode_absorbs: The cathode also takes the electrons the field drives back into it
+            (the drift of the cell next to it, where it points into the cathode), on top of
+            the emitted flux. Without it the cathode emits its fixed flux whatever the field,
+            and once the field at the cathode reverses (the potential in front of it falls
+            below the cathode's) the returned electrons pile up there without limit.
+        anode_sheath: Adds the thermal flux of a full Maxwellian, ``n v_bar / 4``, held back by
+            the Boltzmann factor of the potential drop over the half cell next to the anode,
+            ``exp(-max(phi_N - phi_anode, 0) / T_e)`` with ``phi_N - phi_anode = E_x dx / 2``:
+            an electron-repelling anode sheath where the plasma sits above the anode, the
+            saturation flux where it sits below. Replaces ``anode_thermal_flux``.
         diamagnetic: Factor on the electron pressure-gradient (diamagnetic) force in the fluxes
             and the Poisson solve (a diagnostic switch for the linear analysis; 1 is the model).
         periodic_x: Periodic along ``x`` as well, for a uniform plasma in a uniform field
@@ -778,6 +788,8 @@ class DriftFluid2D:
     heating_scale: float = 1.0
     diamagnetic: float = 1.0
     anode_thermal_flux: bool = False
+    anode_sheath: bool = False
+    cathode_absorbs: bool = False
     floor_added: dict = field(default_factory=lambda: {"ne": 0.0, "ni": 0.0, "N": 0.0})
     _rate_override: np.ndarray | None = field(default=None, repr=False)
     _lu: spla.SuperLU | None = field(default=None, repr=False)
@@ -1170,11 +1182,28 @@ class DriftFluid2D:
         nyf = np.where(vyf > 0.0, np.roll(ni, 1, axis=1), ni)
         return gam_x, nyf * vyf
 
-    def _cathode_flux(self, ion_flux: np.ndarray) -> np.ndarray:
-        """Electron flux into the domain at the cathode, for the ion flux ``ion_flux`` (< 0)."""
+    def _cathode_flux(
+        self, ion_flux: np.ndarray, ne=None, te=None, gas=None, ex=None, ey=None
+    ) -> np.ndarray:
+        """Electron flux into the domain at the cathode, for the ion flux ``ion_flux`` (< 0).
+
+        With ``cathode_absorbs`` (and the cell state ``ne``, ``te``, ``gas`` and the field
+        ``ex``, ``ey`` on the cathode face) the drift of the first cell into the cathode,
+        where it points that way, is taken off.
+        """
         if self.cathode_current_density is not None:
-            return np.full_like(ion_flux, self.cathode_current_density / E)
-        return -self.secondary_emission * ion_flux
+            emitted = np.full_like(ion_flux, self.cathode_current_density / E)
+        else:
+            emitted = -self.secondary_emission * ion_flux
+        if not self.cathode_absorbs or ne is None or te is None or gas is None:
+            return emitted
+        gas_xf, gas_yf = self._face_gas(gas)
+        (mu_xf, h_xf), _ = self._collisions(gas_xf, gas_yf)
+        dpx_xf, dpy_xf, _, _ = self._pressure_gradients(ne * te)
+        fx = ne[0] * ex + dpx_xf[0]
+        fy = ne[0] * ey + dpy_xf[0]
+        drift = -mu_xf[0] * (fx - h_xf[0] * fy)
+        return emitted + np.minimum(drift, 0.0)
 
     def _solve_linear(self, matrix, rhs: np.ndarray) -> np.ndarray:
         """Solve ``matrix x = rhs``, refining with the last LU factors while they still work.
@@ -1199,8 +1228,9 @@ class DriftFluid2D:
     def _anode_flux(self, ne, te, gas, ex, ey):
         """Electron flux out through the anode face: the drift of the adjacent cell, outflow only.
 
-        With ``anode_thermal_flux`` the thermal flux of an absorbing wall is added.
-        ``ex``, ``ey`` are the field components on the anode face (length ``ny``).
+        With ``anode_thermal_flux`` the thermal flux of an absorbing wall is added, with
+        ``anode_sheath`` that of a full Maxwellian behind the Boltzmann factor of the drop
+        to the anode. ``ex``, ``ey`` are the field components on the anode face (length ``ny``).
         """
         gas_xf, gas_yf = self._face_gas(gas)
         (mu_xf, h_xf), _ = self._collisions(gas_xf, gas_yf)
@@ -1208,8 +1238,13 @@ class DriftFluid2D:
         fx = ne[-1] * ex + dpx_xf[-1]
         fy = ne[-1] * ey + dpy_xf[-1]
         flux = -mu_xf[-1] * (fx - h_xf[-1] * fy)
-        if self.anode_thermal_flux:
-            mean_speed = np.sqrt(8.0 * E * te[-1] / (np.pi * ELECTRON_MASS))
+        mean_speed = np.sqrt(8.0 * E * te[-1] / (np.pi * ELECTRON_MASS))
+        if self.anode_sheath:
+            # the plasma's potential above the anode over the half cell: E_x dx / 2
+            drop = np.maximum(0.5 * self.dx * ex, 0.0)
+            barrier = np.exp(-drop / np.maximum(te[-1], TE_FLOOR))
+            flux = np.maximum(flux, 0.0) + 0.25 * ne[-1] * mean_speed * barrier
+        elif self.anode_thermal_flux:
             flux = flux + 0.5 * ne[-1] * mean_speed
         return np.maximum(flux, 0.0)
 
@@ -1239,7 +1274,10 @@ class DriftFluid2D:
         jk_y = E * gam_iy + E * mu_yf * (dpy_yf + h_yf * dpx_yf)
         if not self.periodic_x:
             anode = self._anode_flux(ne, te, gas, lagged[0][-1], lagged[1][-1])
-            jk_x[0] = E * gam_ix[0] - E * self._cathode_flux(gam_ix[0])
+            cathode = self._cathode_flux(
+                gam_ix[0], ne, te, gas, lagged[0][0], lagged[1][0]
+            )
+            jk_x[0] = E * gam_ix[0] - E * cathode
             jk_x[nx] = E * gam_ix[nx] - E * anode
         div_jk = self._divx @ jk_x.ravel() + self._divy @ jk_y.ravel()
         rho = E * (ni - ne).ravel()
@@ -1300,7 +1338,9 @@ class DriftFluid2D:
         fields = self._fields(phi)
         gam_x, gam_y, _ = self._electron_like_flux(ne, te, fields, gas_c, lagged=prev)
         if not self.periodic_x:
-            gam_x[0] = self._cathode_flux(gam_ix[0])
+            gam_x[0] = self._cathode_flux(
+                gam_ix[0], ne, te, gas_c, prev[0][0], prev[1][0]
+            )
             # explicit in the field, as in the Poisson solve, so the discrete charge
             # balance is exact
             gam_x[-1] = self._anode_flux(ne, te, gas_c, prev[0][-1], prev[1][-1])
@@ -1333,7 +1373,11 @@ class DriftFluid2D:
                 ne * te * 1.5, te, fields, gas_c, scale=5.0 / 3.0, lagged=prev
             )
             if not self.periodic_x:
-                q_x[0] = 2.0 * self.secondary_energy_ev * gam_x[0]
+                # the emitted electrons at their energy, the returned ones at 2 T_e
+                emitted = self._cathode_flux(gam_ix[0])
+                q_x[0] = 2.0 * self.secondary_energy_ev * emitted + 2.0 * te[0] * (
+                    gam_x[0] - emitted
+                )
                 q_x[-1] = 2.0 * te[-1].mean() * np.maximum(gam_x[-1], 0.0)
             div_q = (self._divx @ q_x.ravel() + self._divy @ q_y.ravel()).reshape(
                 ne.shape

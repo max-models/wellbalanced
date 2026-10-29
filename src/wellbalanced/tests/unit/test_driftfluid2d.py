@@ -377,6 +377,71 @@ def test_the_cathode_emits_the_prescribed_current() -> None:
     assert model.charge_residual(model._unpack(u1, phi, 1e-10)) < 1e-6
 
 
+def _electrode_model(**settings) -> DriftFluid2D:
+    return DriftFluid2D(
+        0.02,
+        0.016,
+        16,
+        8,
+        voltage=260.0,
+        magnetic_field=exponential_field(0.12, 0.006),
+        cathode_current_density=0.03,
+        **settings,
+    )
+
+
+def test_the_anode_sheath_holds_back_the_wall_flux_by_its_boltzmann_factor() -> None:
+    """Above the plasma the anode takes ``n v_bar / 4``; below it, that times exp(-dphi/T)."""
+    model = _electrode_model(anode_sheath=True)
+    state = model.initial_state(1e15)
+    ne = state.electron_density
+    te = np.full_like(ne, 4.0)
+    gas = state.gas_density
+    gas_c = model._collision_gas(gas, te)
+    saturation = 0.25 * 1e15 * np.sqrt(8.0 * E * 4.0 / (np.pi * 9.1093837015e-31))
+    zero = np.zeros(model.ny)
+    # E_x < 0: the anode above the plasma, electrons drift to it
+    toward = np.full(model.ny, -100.0)
+    attracting = model._anode_flux(ne, te, gas_c, toward, zero)
+    model.anode_sheath = False
+    drift = model._anode_flux(ne, te, gas_c, toward, zero)
+    model.anode_sheath = True
+    assert np.all(drift > 0.0)
+    assert attracting == pytest.approx(saturation + drift)
+    # E_x > 0: the plasma 3 T_e above the anode over the half cell, no drift towards it
+    field = 3.0 * 4.0 / (0.5 * model.dx)
+    repelling = model._anode_flux(ne, te, gas_c, np.full(model.ny, field), zero)
+    assert repelling == pytest.approx(saturation * np.exp(-3.0))
+    model.anode_sheath = False
+    assert np.all(model._anode_flux(ne, te, gas_c, np.full(model.ny, field), zero) == 0)
+
+
+def test_an_absorbing_cathode_takes_the_electrons_driven_back() -> None:
+    """The emitted flux, less the drift into the cathode where the field drives it there."""
+    model = _electrode_model(cathode_absorbs=True)
+    state = model.initial_state(1e15)
+    ne = state.electron_density
+    te = np.full_like(ne, 4.0)
+    gas_c = model._collision_gas(state.gas_density, te)
+    ion_flux = np.full(model.ny, -1e18)
+    zero = np.zeros(model.ny)
+    emitted = 0.03 / E
+    # E_x < 0 at the cathode: electrons pushed away from it, only the emission
+    away = model._cathode_flux(ion_flux, ne, te, gas_c, np.full(model.ny, -1e4), zero)
+    assert away == pytest.approx(emitted)
+    # E_x > 0: the field drives electrons into the cathode, which takes them
+    back = model._cathode_flux(ion_flux, ne, te, gas_c, np.full(model.ny, 1e5), zero)
+    assert np.all(back < emitted)
+    model.cathode_absorbs = False
+    assert model._cathode_flux(
+        ion_flux, ne, te, gas_c, np.full(model.ny, 1e5), zero
+    ) == pytest.approx(emitted)
+    # with both options a stage keeps the discrete charge balance
+    model = _electrode_model(cathode_absorbs=True, anode_sheath=True)
+    u1, phi = model._euler(model._pack(state), state.potential, 1e-10)
+    assert model.charge_residual(model._unpack(u1, phi, 1e-10)) < 1e-6
+
+
 def test_the_energy_loss_is_implicit_so_a_huge_step_stays_bounded() -> None:
     model = DriftFluid2D(
         0.02,

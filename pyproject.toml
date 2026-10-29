@@ -94,9 +94,9 @@ report.show_missing = true
 # PRs to devel test against the devel branches of the max-models packages (pinned in
 # uv.lock); PRs to main and the release use PyPI only (CI sets UV_NO_SOURCES).
 [tool.uv.sources]
-opencr = { git = "https://github.com/max-models/opencr", branch = "molecules-inference" }
+opencr = { git = "https://github.com/max-models/opencr", branch = "devel" }
 patchwork-amr = { git = "https://github.com/max-models/patchwork", branch = "devel" }
 plasma-plots = { git = "https://github.com/max-models/plasma-plots", branch = "devel" }
-plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "h2-highn" }
+plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "devel" }
 scope-profiler = { git = "https://github.com/max-models/scope-profiler", branch = "devel" }
 simgeometry = { git = "https://github.com/max-models/simgeometry", branch = "devel" }

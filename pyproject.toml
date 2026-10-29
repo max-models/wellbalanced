@@ -27,6 +27,7 @@ dependencies = [
   "scipy",
   "xarray",
 ]
+optional-dependencies.cr = [ "opencr" ]
 optional-dependencies.dev = [
   "jupyterlab",
   "pre-commit",
@@ -47,6 +48,7 @@ optional-dependencies.docs = [
 ]
 optional-dependencies.spatial = [ "patchwork-amr>=0.2.0", "simgeometry>=0.1.1" ]
 optional-dependencies.test = [
+  "opencr",
   "patchwork-amr>=0.2.0",
   "pytest",
   "pytest-cov",
@@ -92,8 +94,9 @@ report.show_missing = true
 # PRs to devel test against the devel branches of the max-models packages (pinned in
 # uv.lock); PRs to main and the release use PyPI only (CI sets UV_NO_SOURCES).
 [tool.uv.sources]
+opencr = { git = "https://github.com/max-models/opencr", branch = "molecules-inference" }
 patchwork-amr = { git = "https://github.com/max-models/patchwork", branch = "devel" }
 plasma-plots = { git = "https://github.com/max-models/plasma-plots", branch = "devel" }
-plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "devel" }
+plasmacoll = { git = "https://github.com/max-models/plasmacoll", branch = "h2-highn" }
 scope-profiler = { git = "https://github.com/max-models/scope-profiler", branch = "devel" }
 simgeometry = { git = "https://github.com/max-models/simgeometry", branch = "devel" }

@@ -7,6 +7,10 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `wellbalanced.cr` (the `cr` extra): hydrogen and deuterium reaction sets from OpenCR's
+  collisional-radiative models (effective ionization, recombination, dissociation and radiative
+  energy loss at a given electron density, the H₂⁺/H₃⁺ chemistry), `hydrogen_driver` and
+  `deuterium_neutralizer` with them in place of the placeholder rates.
 - `DriftFluid2D(bohm_below=B_c)`: the anomalous frequency `bohm omega_ce / 16` only where the
   field is weak, times `1 / (1 + (B / B_c)^4)`. In Boeuf's case (absorbing anode and cathode,
   `B_c` 10 mT) `bohm` 0.2 to 0.5 gives his anode region at 1.8 cm (L_n -1.6 to -1.8 mm against

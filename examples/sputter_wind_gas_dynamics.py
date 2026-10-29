@@ -1,4 +1,6 @@
-"""The sputter wind: the argon in front of a sputtering target, as a compressible gas.
+"""Sputter wind.
+
+The sputter wind: the argon in front of a sputtering target, as a compressible gas.
 
 The target of a magnetron is a wall in front of a gas at 1 Pa that emits sputtered metal atoms
 and, at the same time, the ions that hit it return as neutrals. Here only the sputtered

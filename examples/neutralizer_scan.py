@@ -1,4 +1,6 @@
-"""A beam-driven plasma neutralizer: the neutral fraction against the gas flow.
+"""Neutralizer gas scan.
+
+A beam-driven plasma neutralizer: the neutral fraction against the gas flow.
 
 A 1 MeV, 10 A deuterium negative-ion beam crosses a 3 m channel. On the gas,
 and on the plasma it makes itself, it changes charge state; the plasma is a

@@ -1,4 +1,6 @@
-"""The BUG driver in r–z: cold and viscous electrons, and the global model's plasma.
+"""RF driver in r–z.
+
+The BUG driver in r–z: cold and viscous electrons, and the global model's plasma.
 
 The 2D cylindrically symmetric domain of Zielke, Briefi, Lishev and Fantz (Plasma Sources
 Sci. Technol. 31, 035019, 2022, Fig. 1(b), dimensions read off the figure): the driver

@@ -1,4 +1,6 @@
-"""Verification of the 2D drift fluid: a uniform state, the E x B drift and a linear instability.
+"""Drift fluid verification.
+
+Verification of the 2D drift fluid: a uniform state, the E x B drift and a linear instability.
 
 Three checks of :class:`wellbalanced.DriftFluid2D` against theory, each in seconds:
 

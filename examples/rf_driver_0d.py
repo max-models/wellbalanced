@@ -1,4 +1,6 @@
-"""A 0D RF driver: coil current and RF power transfer efficiency in seconds.
+"""0D RF driver.
+
+A 0D RF driver: coil current and RF power transfer efficiency in seconds.
 
 :class:`wellbalanced.RFDriver` couples a global model of the driver's hydrogen plasma
 to a transformer model of the coil (Piejak, Godyak and Alexandrovich 1992; Lieberman

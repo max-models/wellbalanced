@@ -1,4 +1,6 @@
-"""A 1D argon discharge between two grounded walls: profiles from the fluid model.
+"""1D argon discharge.
+
+A 1D argon discharge between two grounded walls: profiles from the fluid model.
 
 Electrons and ions drift and diffuse in their own field (Poisson's equation),
 the electrons are heated uniformly and lose energy in ionization, which sustains

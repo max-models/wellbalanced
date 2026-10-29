@@ -1,4 +1,6 @@
-"""The BUG driver's gas: H and H2 as Navier–Stokes fluids, depleted and heated by the plasma.
+"""RF driver neutrals.
+
+The BUG driver's gas: H and H2 as Navier–Stokes fluids, depleted and heated by the plasma.
 
 Step R3.5 of the RF-driver plan: :class:`wellbalanced.spatial.NeutralFluid2D`, the neutral
 model of Zielke et al. (PSST 31, 035019, 2022, section 2.3), coupled to the driver plasma

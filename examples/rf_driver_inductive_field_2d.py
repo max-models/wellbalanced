@@ -1,4 +1,6 @@
-"""The RF field of one and two drivers with a prescribed plasma: mutual coupling and shields.
+"""RF driver inductive field.
+
+The RF field of one and two drivers with a prescribed plasma: mutual coupling and shields.
 
 The geometry of Zielke, Briefi and Fantz (NIBS'22, arXiv:2211.10143, Fig. 2): a
 horizontal 2D cut through a driver (23.7 cm wide, 17.4 cm long) and the expansion region

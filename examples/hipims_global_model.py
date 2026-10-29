@@ -1,4 +1,6 @@
-"""A global model of a HiPIMS magnetron: rarefaction, metal ions and self-sputtering.
+"""HiPIMS global model.
+
+A global model of a HiPIMS magnetron: rarefaction, metal ions and self-sputtering.
 
 The ionization region of a sputtering magnetron in argon, balanced as a global model: Ar
 and the sputtered metal, ionized by the electrons the secondary electrons heat, lost at the

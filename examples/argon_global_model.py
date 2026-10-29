@@ -1,4 +1,6 @@
-"""A global model of an argon discharge: electron temperature and density against pressure.
+"""Argon global model.
+
+A global model of an argon discharge: electron temperature and density against pressure.
 
 The textbook global model (Lieberman and Lichtenberg, ch. 10): one ion species,
 ionization from a step cross section averaged over a Maxwellian (with plasmacoll),

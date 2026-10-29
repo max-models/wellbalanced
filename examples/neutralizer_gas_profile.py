@@ -1,4 +1,6 @@
-"""A beam-driven plasma neutralizer with the gas along the channel: scans of flow and current.
+"""Neutralizer gas profile.
+
+A beam-driven plasma neutralizer with the gas along the channel: scans of flow and current.
 
 Gas fed into the middle of a neutralizer channel flows to its two open ends as a free-molecular
 gas: a molecule hits the walls far more often than other molecules and random-walks to an end.

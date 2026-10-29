@@ -1,4 +1,6 @@
-"""The BUG driver in r–z as a 2D fluid heated by its inductive field.
+"""RF driver 2D fluid.
+
+The BUG driver in r–z as a 2D fluid heated by its inductive field.
 
 Step R3.3 of the RF-driver plan: :class:`wellbalanced.spatial.Fluid2D`, the driver plasma as
 a multi-species fluid (electrons, H+, H2+ and H3+ in a fixed H2 and H background at

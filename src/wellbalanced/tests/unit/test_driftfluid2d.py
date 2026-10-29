@@ -442,6 +442,20 @@ def test_an_absorbing_cathode_takes_the_electrons_driven_back() -> None:
     assert model.charge_residual(model._unpack(u1, phi, 1e-10)) < 1e-6
 
 
+def test_the_anomalous_frequency_can_act_in_the_weak_field_only() -> None:
+    """``bohm_below`` weights ``alpha omega_ce / 16`` by ``1 / (1 + (B / B_c)^4)``."""
+    model = _electrode_model(bohm=1.0, bohm_below=0.01)
+    fields = np.array([0.001, 0.01, 0.1])
+    omega = E * fields / 9.1093837015e-31
+    full = omega / 16.0
+    assert model._bohm_nu(omega) == pytest.approx(
+        full / (1.0 + (fields / 0.01) ** 4), rel=1e-6
+    )
+    assert model._bohm_nu(omega)[1] == pytest.approx(0.5 * full[1], rel=1e-6)
+    model.bohm_below = None
+    assert model._bohm_nu(omega) == pytest.approx(full)
+
+
 def test_the_energy_loss_is_implicit_so_a_huge_step_stays_bounded() -> None:
     model = DriftFluid2D(
         0.02,

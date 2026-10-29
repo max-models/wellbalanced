@@ -7,6 +7,13 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `DriftFluid2D(bohm_below=B_c)`: the anomalous frequency `bohm omega_ce / 16` only where the
+  field is weak, times `1 / (1 + (B / B_c)^4)`. In Boeuf's case (absorbing anode and cathode,
+  `B_c` 10 mT) `bohm` 0.2 to 0.5 gives his anode region at 1.8 cm (L_n -1.6 to -1.8 mm against
+  -2.2, E -0.5 to -2.4 kV/m against -2.2, T_e 11-12 eV; the density 3.4-3.8e14 against 8e14),
+  and the leading linear mode becomes a +E x B wave (2-2.7 cm, +9 to +13 km/s, 1.8e6 /s at
+  `bohm` 0.2) instead of the ionization mode; the discharge still drifts on the gas time
+  (refill 2e4 /s), so it is not yet a steady state.
 - `DriftFluid2D(anode_sheath=True)`: the anode takes the thermal flux of a full Maxwellian,
   `n v_bar / 4`, behind the Boltzmann factor of the potential drop over the half cell next to
   it (the saturation flux where the anode sits above the plasma, as in a magnetron), and

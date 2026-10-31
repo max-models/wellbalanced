@@ -7,6 +7,20 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `wellbalanced.dispersion`: the local gradient-drift (Simon–Hoh) dispersion relation with
+  the electron momentum balance solved exactly (inertia, collisions, flow shear), the
+  compressibility of every drift in the model field `B(x) z` by differentiation in `B` and
+  `E_0` (and the curl-free, 3D-arch factor 2 as an option), cold or kinetic (plasma dispersion
+  function, flow, Landau damping) unmagnetised ions, Poisson or quasineutral closure, an
+  ionization source; `LocalDispersion.roots` finds every root in a box of the complex plane,
+  `scan` follows a branch over `k_y`, `scan_profile` runs along a 1D equilibrium. In the
+  strongly driven limit the growth rate is `k sqrt(e E L_eff / m_i)` with
+  `1 / L_eff = 1 / L_n - 1 / L_B` (`- 2 / L_B` curl-free), the Rayleigh–Taylor rate with the
+  field on the free ions as gravity; the fast mode sits in the cold-ion limit. Agrees with
+  `boeuf_dispersion_roots` without a `B` gradient and not with one (his factor 2 on the grad-B
+  terms), which the 2D PIC with a varied `L_B` has to decide. Example
+  `examples/magnetron_dispersion.py`.
+
 - `wellbalanced.cr` (the `cr` extra): hydrogen and deuterium reaction sets from OpenCR's
   collisional-radiative models (effective ionization, recombination, dissociation and radiative
   energy loss at a given electron density, the H₂⁺/H₃⁺ chemistry), `hydrogen_driver` and

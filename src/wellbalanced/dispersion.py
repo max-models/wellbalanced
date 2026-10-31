@@ -24,6 +24,17 @@ perturbations ``exp(i (k_x x + k_y y) - i omega t)``, so ``Im omega > 0`` grows 
 ``Re omega / k_y`` is the phase speed along ``+y``. Gradient lengths are signed, ``L = f / f'``,
 negative when ``f`` falls toward the anode. Temperatures in eV, fields in V/m and T.
 
+The relation has several branches, and ``roots`` returns all of them within its validity
+box: the **gradient-drift** mode (``|Re omega| << k v_E``, growth up to a few ``1e6`` /s in a
+magnetron), a **lower-hybrid** branch (``Re omega ~ omega_LH = sqrt(omega_ce omega_ci)``, slow
+growth, present wherever the gradient-drift mode is not), and at weak ``B`` **electron-scale**
+roots (``Re omega ~ 0.3 omega_ce``, ``gamma ~ 1e7-1e8`` /s, the Buneman/cyclotron-drift family
+of the cold momentum balance with Poisson's equation) which are outside the drift ordering and
+below any PIC grid of interest. :meth:`LocalRoots.drift` keeps the roots of the drift ordering,
+``|Re omega| < 0.3 k_y v_E`` and ``|Im omega| < 0.02 omega_ce``, and ``scan`` and ``scan_profile``
+follow that branch by default (``branch="drift"``; ``"fastest"`` takes the fastest root of all),
+returning every root as well.
+
 Where the two models can be compared (uniform ``B``, no collisions, Poisson) the roots agree
 with :func:`~wellbalanced.driftfluid2d.boeuf_dispersion_roots` to better than 0.1 %. With a
 ``B`` gradient they do not: Boeuf's relation carries the grad-B frequency
@@ -203,6 +214,35 @@ class LocalRoots:
     def phase_speed(self) -> float:
         """``Re omega / k_y`` of the fastest root (m/s, along ``+y``); ``nan`` without roots."""
         return float(self.omega[0].real / self.ky) if self.omega.size else np.nan
+
+    def drift(
+        self, plasma: Plasma, phase_speed: float = 0.3, growth: float = 0.02
+    ) -> LocalRoots:
+        """The roots within the drift ordering, fastest first.
+
+        Keeps ``|Re omega| < phase_speed |k_y v_E|`` (the phase speed well below the
+        ``E x B`` speed: the gradient-drift and lower-hybrid branches, not the
+        electron-scale roots at ``Re omega ~ 0.3 omega_ce``) and ``|Im omega| < growth
+        omega_ce`` (growth slow against the gyration).
+        """
+        if not self.omega.size:
+            return self
+        limit_re = phase_speed * abs(self.ky * plasma.exb_velocity)
+        limit_im = growth * plasma.omega_ce
+        keep = (np.abs(np.real(self.omega)) < limit_re) & (
+            np.abs(np.imag(self.omega)) < limit_im
+        )
+        omega = np.array(sorted(self.omega[keep], key=lambda o: -o.imag), dtype=complex)
+        return LocalRoots(self.kx, self.ky, omega)
+
+
+def _select_branch(roots: LocalRoots, plasma: Plasma, branch: str) -> LocalRoots:
+    """The roots of ``branch``: ``"drift"`` (the drift ordering) or ``"fastest"`` (all)."""
+    if branch == "drift":
+        return roots.drift(plasma)
+    if branch == "fastest":
+        return roots
+    raise ValueError("branch is 'drift' or 'fastest'")
 
 
 @dataclass(frozen=True)
@@ -401,26 +441,43 @@ class LocalDispersion:
         omega = np.array(sorted(found, key=lambda o: -o.imag), dtype=complex)
         return LocalRoots(kx, ky, omega)
 
-    def scan(self, ky: np.ndarray, kx: float = 0.0) -> xr.Dataset:
-        """The fastest root over ``k_y``: ``growth_rate``, ``frequency``, ``phase_speed``.
+    def scan(
+        self,
+        ky: np.ndarray,
+        kx: float = 0.0,
+        branch: str = "drift",
+        max_roots: int = 12,
+    ) -> xr.Dataset:
+        """The selected branch over ``k_y``: ``growth_rate``, ``frequency``, ``phase_speed``.
 
-        Each ``k_y`` is seeded with the roots of the previous one, so a branch is followed.
+        ``branch="drift"`` follows the fastest root of the drift ordering
+        (:meth:`LocalRoots.drift`), ``"fastest"`` the fastest root of all. Every root found
+        (up to ``max_roots``, fastest first, ``nan`` beyond) is returned too as ``omega_re``
+        and ``omega_im`` on ``(ky, root)``, so the branches can be sorted afterwards. Each
+        ``k_y`` is seeded with the roots of the previous one, so a branch is followed.
         """
         growth, freq = [], []
+        every = np.full((len(ky), max_roots), np.nan + 0j)
         previous: np.ndarray | None = None
-        for k in ky:
+        for j, k in enumerate(ky):
             roots = self.roots(kx, float(k), seeds=previous)
             previous = roots.omega if roots.omega.size else None
-            growth.append(roots.growth_rate if roots.omega.size else np.nan)
-            freq.append(roots.omega[0].real if roots.omega.size else np.nan)
+            n = min(roots.omega.size, max_roots)
+            every[j, :n] = roots.omega[:n]
+            selected = _select_branch(roots, self.plasma, branch)
+            growth.append(selected.growth_rate if selected.omega.size else np.nan)
+            freq.append(selected.omega[0].real if selected.omega.size else np.nan)
         growth_a, freq_a = np.array(growth), np.array(freq)
         return xr.Dataset(
             {
                 "growth_rate": ("ky", growth_a, {"units": "1/s"}),
                 "frequency": ("ky", freq_a, {"units": "rad/s"}),
                 "phase_speed": ("ky", freq_a / np.asarray(ky), {"units": "m/s"}),
+                "omega_re": (("ky", "root"), np.real(every), {"units": "rad/s"}),
+                "omega_im": (("ky", "root"), np.imag(every), {"units": "rad/s"}),
             },
             coords={"ky": ("ky", np.asarray(ky), {"units": "1/m"})},
+            attrs={"branch": branch},
         )
 
 
@@ -431,13 +488,17 @@ def scan_profile(
     electron_collision_frequency: float = 0.0,
     curl_free_field: bool = False,
     quasineutral: bool = False,
+    branch: str = "drift",
+    max_roots: int = 12,
 ) -> xr.Dataset:
-    """The fastest local root along a 1D profile at one ``k_y``.
+    """The selected branch along a 1D profile at one ``k_y``.
 
     ``profile`` has ``x`` (m) and the variables ``density`` (m^-3), ``e_field`` (V/m),
     ``b_field`` (T) and ``electron_temperature`` (eV); the gradient lengths come from
-    centred differences. ``ions`` default to cold argon. Returns ``growth_rate``,
-    ``frequency`` and ``phase_speed`` on ``x``, with the lengths used.
+    centred differences. ``ions`` default to cold argon; ``branch`` as in
+    :meth:`LocalDispersion.scan`. Returns ``growth_rate``, ``frequency`` and
+    ``phase_speed`` on ``x``, every root as ``omega_re`` and ``omega_im`` on ``(x, root)``,
+    and the lengths used.
     """
     ions = ColdIons() if ions is None else ions
     x = profile["x"].values
@@ -453,22 +514,29 @@ def scan_profile(
 
     ln, lb, le = length(n), length(b), length(e_field)
     growth, freq = [], []
+    every = np.full((x.size, max_roots), np.nan + 0j)
     for i in range(x.size):
         plasma = Plasma(
             float(n[i]), float(e_field[i]), float(b[i]), float(te[i]), float(ln[i]),
             float(lb[i]), float(le[i]), electron_collision_frequency, 0.0, curl_free_field,
         )  # fmt: skip
         roots = LocalDispersion(plasma, ions, quasineutral).roots(0.0, ky)
-        growth.append(roots.growth_rate if roots.omega.size else np.nan)
-        freq.append(roots.omega[0].real if roots.omega.size else np.nan)
+        m = min(roots.omega.size, max_roots)
+        every[i, :m] = roots.omega[:m]
+        selected = _select_branch(roots, plasma, branch)
+        growth.append(selected.growth_rate if selected.omega.size else np.nan)
+        freq.append(selected.omega[0].real if selected.omega.size else np.nan)
     growth_a, freq_a = np.array(growth), np.array(freq)
     return xr.Dataset(
         {
             "growth_rate": ("x", growth_a, {"units": "1/s"}),
             "frequency": ("x", freq_a, {"units": "rad/s"}),
             "phase_speed": ("x", freq_a / ky, {"units": "m/s"}),
+            "omega_re": (("x", "root"), np.real(every), {"units": "rad/s"}),
+            "omega_im": (("x", "root"), np.imag(every), {"units": "rad/s"}),
             "density_length": ("x", ln, {"units": "m"}),
             "field_length": ("x", lb, {"units": "m"}),
         },
         coords={"x": ("x", x, {"units": "m"})},
+        attrs={"branch": branch},
     )

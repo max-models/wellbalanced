@@ -7,6 +7,15 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `wellbalanced.transport`: the cross-field electron transport of a 2D `(x, y)` run from
+  the moments its PIC deposits (picnic's `MomentRecorder`): `momentum_budget` evaluates every
+  term of the `y`-averaged momentum identity as a flux across `B` (the fluctuation-driven
+  `E x B` flux `<n E_y> / B`, split into a spoke band and the rest, the collisional, inertial
+  and stress terms) and its residual, with the effective Hall parameter; `loop_identity`
+  checks `<n E_y> = <phi d_y n>`, the identity behind the spoke-front picture; `mode_fluxes`
+  resolves the `E x B` flux by azimuthal mode with the phase between potential and density.
+  Example `examples/transport_budget.py`.
+
 - `wellbalanced.dispersion`: the local gradient-drift (Simon–Hoh) dispersion relation with
   the electron momentum balance solved exactly (inertia, collisions, flow shear), the
   compressibility of every drift in the model field `B(x) z` by differentiation in `B` and

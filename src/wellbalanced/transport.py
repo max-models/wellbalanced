@@ -57,15 +57,11 @@ def _mass_charge(
     ds: xr.Dataset, index: int, mass: float | None, charge: float | None
 ) -> tuple[float, float]:
     """``(mass, charge)`` from the arguments or the dataset's attributes (one value or one per species)."""
-    if mass is None:
-        mass = ds.attrs.get("mass", ELECTRON_MASS)
-    if charge is None:
-        charge = ds.attrs.get("charge", -E)
-    if np.ndim(mass):
-        mass = np.asarray(mass)[index]
-    if np.ndim(charge):
-        charge = np.asarray(charge)[index]
-    return float(mass), float(charge)
+    values = []
+    for given, key, default in ((mass, "mass", ELECTRON_MASS), (charge, "charge", -E)):
+        value = np.asarray(ds.attrs.get(key, default) if given is None else given)
+        values.append(float(value[index] if value.ndim else value))
+    return values[0], values[1]
 
 
 def _b_field(ds: xr.Dataset) -> xr.DataArray:

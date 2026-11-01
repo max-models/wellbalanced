@@ -7,6 +7,12 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `wellbalanced.dispersion`: `LocalRoots.drift` keeps the roots of the drift ordering
+  (`|Re omega| < 0.3 k_y v_E`, `|Im omega| < 0.02 omega_ce`), which separates the gradient-drift
+  and lower-hybrid branches from the electron-scale roots (`Re omega ~ 0.3 omega_ce`,
+  `gamma ~ 1e7-1e8` /s) the relation also has at weak `B`; `scan` and `scan_profile` follow
+  that branch by default (`branch="drift"`, or `"fastest"`) and return every root found as
+  `omega_re`, `omega_im` on a `root` dimension, so the branches can be sorted afterwards.
 - `wellbalanced.transport`: the cross-field electron transport of a 2D `(x, y)` run from
   the moments its PIC deposits (picnic's `MomentRecorder`): `momentum_budget` evaluates every
   term of the `y`-averaged momentum identity as a flux across `B` (the fluctuation-driven

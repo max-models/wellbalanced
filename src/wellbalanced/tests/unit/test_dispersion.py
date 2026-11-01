@@ -12,6 +12,7 @@ from wellbalanced.dispersion import (
     E,
     KineticIons,
     LocalDispersion,
+    LocalRoots,
     Plasma,
     plasma_dispersion_function,
     scan_profile,
@@ -148,7 +149,18 @@ def test_scan_follows_the_branch_with_growth_linear_in_k() -> None:
     model = LocalDispersion(_clean(), ColdIons(), quasineutral=True)
     ky = np.array([200.0, 400.0, 800.0])
     scan = model.scan(ky)
-    assert set(scan) == {"growth_rate", "frequency", "phase_speed"}
+    assert set(scan) == {
+        "growth_rate",
+        "frequency",
+        "phase_speed",
+        "omega_re",
+        "omega_im",
+    }
+    assert scan["omega_re"].dims == ("ky", "root") and scan.attrs["branch"] == "drift"
+    # the followed root is among the roots returned
+    assert np.isclose(
+        scan["omega_im"].max("root").values, scan["growth_rate"].values
+    ).all()
     growth = scan["growth_rate"].values
     assert growth[1] / growth[0] == pytest.approx(2.0, rel=0.05)
     assert growth[2] / growth[1] == pytest.approx(2.0, rel=0.05)
@@ -181,3 +193,38 @@ def test_scan_profile_grows_fastest_where_the_gradient_is_gentlest() -> None:
     # np.gradient is one-sided at the edge, so x[0] has a finite, very gentle L_n: fastest
     assert growth[0] > growth[1] > growth[4] > growth[8] > 0.0
     assert np.all(np.diff(growth) < 0.0)
+
+
+def test_the_drift_ordering_drops_the_electron_scale_roots() -> None:
+    # Boeuf's profile at 14 mm (B 11.6 mT, 4.5e7 /s collisions, |L_n| > a): no gradient-drift
+    # mode, a slow lower-hybrid root, and electron-scale roots at Re omega ~ 0.3 omega_ce
+    plasma = Plasma(
+        density=2.079e15,
+        e_field=-6326.0,
+        b_field=0.01164,
+        electron_temperature=11.76,
+        density_length=-8.431e-3,
+        field_length=-5.993e-3,
+        e_field_length=-6.29e-3,
+        electron_collision_frequency=4.501e7,
+    )
+    ky = 2 * np.pi * 3 / 0.08
+    roots = LocalDispersion(plasma, ColdIons()).roots(0.0, ky)
+    assert roots.growth_rate > 1e7  # the electron-scale root is the fastest of all
+    assert abs(roots.phase_speed) > 3 * plasma.exb_velocity
+    drift = roots.drift(plasma)
+    assert 0 < drift.omega.size < roots.omega.size
+    assert drift.growth_rate < 1e6
+    assert abs(drift.phase_speed) < 0.3 * plasma.exb_velocity
+    assert (np.abs(drift.omega.imag) < 0.02 * plasma.omega_ce).all()
+    omega_lh = np.sqrt(plasma.omega_ce * E * plasma.b_field / ARGON_MASS)
+    assert abs(abs(drift.omega[0].real) - omega_lh) < 0.6 * omega_lh
+    # the scans follow the drift branch by default and still return every root
+    fastest = LocalDispersion(plasma, ColdIons()).scan(np.array([ky]), branch="fastest")
+    following = LocalDispersion(plasma, ColdIons()).scan(np.array([ky]))
+    assert float(fastest["growth_rate"][0]) > 1e7 > float(following["growth_rate"][0])
+    assert np.nanmax(following["omega_im"].values) > 1e7
+    with pytest.raises(ValueError, match="branch"):
+        LocalDispersion(plasma, ColdIons()).scan(np.array([ky]), branch="ions")
+    empty = LocalRoots(0.0, ky, np.array([], dtype=complex)).drift(plasma)
+    assert empty.omega.size == 0 and np.isnan(empty.growth_rate)

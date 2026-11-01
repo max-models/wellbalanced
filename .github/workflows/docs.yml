@@ -24,11 +24,15 @@ jobs:
   docs:
     uses: max-models/starlight-theme/.github/workflows/docs.yml@v0
     with:
+      extras: docs cr
       pre-build: uv run python docs/tools/examples.py
       smoke-paths: |
         getting-started/installation/index.html
         tutorials/index.html
         tutorials/global-model/index.html
+        tutorials/fluid-1d/index.html
+        tutorials/rf-driver/index.html
+        tutorials/spoke-model/index.html
         full-examples/index.html
         full-examples/argon-global-model/index.html
         full-examples/argon-discharge-1d/index.html

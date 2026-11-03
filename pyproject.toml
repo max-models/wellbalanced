@@ -22,7 +22,7 @@ classifiers = [
 dependencies = [
   "methodcard",
   "numpy",
-  "plasmacoll>=0.3.0",
+  "plasmacoll>=0.5.0",
   "scope-profiler>=0.7.5",
   "scipy",
   "xarray",

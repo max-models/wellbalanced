@@ -461,6 +461,12 @@ class InductiveField3D:
         flat = [int(np.ravel_multi_index(tuple(n), grid.nodes)) for n in nodes]
         return np.asarray(edges), np.asarray(signs), flat
 
+    def _gradient_matrix(self) -> sp.csr_matrix:
+        grid = self.grid
+        if not hasattr(grid, "_gradient_matrix"):
+            grid._gradient_matrix = grid.gradient()  # type: ignore[attr-defined]
+        return grid._gradient_matrix  # type: ignore[attr-defined]
+
     def _feed_source(self) -> np.ndarray:
         """``j`` of the feeds for 1 A [A]: the current along each path's edges.
 
@@ -488,12 +494,6 @@ class InductiveField3D:
                 )
             np.add.at(source, edges, signs)
         return source
-
-    def _gradient_matrix(self) -> sp.csr_matrix:
-        grid = self.grid
-        if not hasattr(grid, "_gradient_matrix"):
-            grid._gradient_matrix = grid.gradient()  # type: ignore[attr-defined]
-        return grid._gradient_matrix  # type: ignore[attr-defined]
 
     def _edge_conductivity(
         self, background: PointField | None

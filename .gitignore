@@ -174,3 +174,4 @@ junit/
 # Quarto
 .quarto/
 README_files/
+.rnet_cache/

@@ -18,7 +18,11 @@ Coils: `Coil3D`, the current on the surface of a region, ``J = curl T`` with
 ``j = C^T (T L*)``, so ``G^T j = 0`` exactly: the coil current is divergence-free on the
 grid whatever the shape. A solenoid is a cylinder with ``T`` along its axis; a
 rectangular loop is a box with ``T`` normal to the loop; the sheet sits on the region's
-staircased surface.
+staircased surface. A coil of real wire (copper tube, with its own losses and proximity
+effect) is an `ImpedanceConductor3D` driven by a `Feed3D`: the current along grid
+edges across a gap between the coil's terminals (a delta-gap source), which returns
+through the metal; the terminals must lie in one connected piece of metal on the grid
+(about two cells across the wire).
 
 Conductors: `Conductor3D`, a conductivity on the edges inside shapes (the
 midpoint rule, staircased; or a sub-cell average, ``samples``), and a background
@@ -77,6 +81,7 @@ from wellbalanced.spatial.iterative import AuxiliarySpacePreconditioner, cocg
 __all__ = [
     "Coil3D",
     "Conductor3D",
+    "Feed3D",
     "ImpedanceConductor3D",
     "InductiveField3D",
     "InductiveSolution3D",
@@ -107,6 +112,33 @@ class Coil3D:
     shape: Any
     direction: tuple[float, float, float] = (0.0, 0.0, 1.0)
     turns_per_length: float = 1.0
+    name: str = ""
+
+
+@dataclass(frozen=True)
+class Feed3D:
+    """A current source along grid edges: the terminals of a coil of real wire.
+
+    The coil current flows along the edges of the grid from the node nearest ``start``
+    to the node nearest ``end``, axis by axis in ``order``. Both terminals must lie
+    in the metal of the same `ImpedanceConductor3D` (or of the same Dirichlet
+    wall): the current enters that conductor at one end of the path, flows on its
+    surface, and leaves it at the other, so the coil's own Joule loss and its proximity
+    effect are in the solution. A helical coil with its two leads and a gap between
+    their ends: the feed bridges the gap, from inside one lead to inside the other
+    (a delta-gap source; ``V = -i omega a`` summed along the path is the terminal
+    voltage). The edges of the path inside the metal are not unknowns and drop out.
+
+    Attributes:
+        start: The first terminal (a point inside the metal) [m].
+        end: The second terminal [m].
+        order: The axes the path follows, in turn.
+        name: A label.
+    """
+
+    start: tuple[float, float, float]
+    end: tuple[float, float, float]
+    order: tuple[int, int, int] = (0, 1, 2)
     name: str = ""
 
 
@@ -328,6 +360,9 @@ class InductiveField3D:
         grid: The edge grid (its boundaries are the field's).
         frequency: The frequency [Hz].
         coils: The coils, all carrying the coil current.
+        feeds: Current sources along grid edges (`Feed3D`), also carrying the
+            coil current: the terminals of coils of real wire, modelled as
+            `ImpedanceConductor3D`.
         conductors: Conductors of uniform conductivity (must not overlap).
         conductivity: A background conductivity [S/m] as a function of ``(3, n)``
             points, e.g. a cold plasma's complex ``sigma``; added outside the
@@ -346,6 +381,10 @@ class InductiveField3D:
             true area otherwise).
         min_sine: The bound of ``sin(theta)`` in the cut faces' surface widths
             (`wellbalanced.spatial.cutcell.cut_cells`).
+        cut_cell_samples: The sampling of the conductors' crossings along each edge
+            and line of the cut cells (simgeometry's ``yee_fractions``), for shapes
+            without analytic crossings (Booleans, helices); fewer is faster, and
+            features thinner than a ``samples``-th of a cell can be missed.
     """
 
     # --- sources and materials -----------------------------------------------------
@@ -389,6 +428,72 @@ class InductiveField3D:
                 raise ValueError(f"coil {coil.name!r} contains no face")
             t += weight * coil.turns_per_length * direction[normals]
         return np.asarray(_curl(grid).T @ (t * grid.dual_lengths))
+
+    def _feed_edges(self, feed: Feed3D) -> tuple[np.ndarray, np.ndarray, list]:
+        """The edges of a feed's path, their signs and the two terminal nodes."""
+        grid = self.grid
+        nodes = []
+        for point in (feed.start, feed.end):
+            index = np.rint(
+                (np.asarray(point, dtype=float) - grid.lower) / grid.spacing
+            )
+            index = index.astype(int)
+            if np.any(index < 0) or np.any(index >= np.asarray(grid.nodes)):
+                raise ValueError(f"feed {feed.name!r}: a terminal is outside the grid")
+            nodes.append(index)
+        if sorted(feed.order) != [0, 1, 2]:
+            raise ValueError("a feed's order is a permutation of the three axes")
+        edges, signs = [], []
+        current = nodes[0].copy()
+        for axis in feed.order:
+            step = 1 if nodes[1][axis] >= current[axis] else -1
+            while current[axis] != nodes[1][axis]:
+                low = current.copy()
+                if step < 0:
+                    low[axis] -= 1
+                edges.append(
+                    int(grid._edge_index(axis, [np.array([i]) for i in low])[0])
+                )
+                signs.append(float(step))
+                current[axis] += step
+        if not edges:
+            raise ValueError(f"feed {feed.name!r}: its terminals are the same node")
+        flat = [int(np.ravel_multi_index(tuple(n), grid.nodes)) for n in nodes]
+        return np.asarray(edges), np.asarray(signs), flat
+
+    def _gradient_matrix(self) -> sp.csr_matrix:
+        grid = self.grid
+        if not hasattr(grid, "_gradient_matrix"):
+            grid._gradient_matrix = grid.gradient()  # type: ignore[attr-defined]
+        return grid._gradient_matrix  # type: ignore[attr-defined]
+
+    def _feed_source(self) -> np.ndarray:
+        """``j`` of the feeds for 1 A [A]: the current along each path's edges.
+
+        Raises if a feed's terminals are not in the same connected piece of metal (the
+        nodes joined by edges that are not unknowns): then its current would have no
+        return path on the grid.
+        """
+        grid = self.grid
+        source = np.zeros(grid.n_edges)
+        if not self.feeds:
+            return source
+        import scipy.sparse.csgraph as csgraph
+
+        gradient = abs(self._gradient_matrix())
+        metal = sp.diags((~self.free_edges).astype(float))
+        graph = (gradient.T @ metal @ gradient).tocsr()
+        _, piece = csgraph.connected_components(graph, directed=False)
+        isolated = np.asarray(graph.sum(axis=1)).ravel() == 0
+        for feed in self.feeds:
+            edges, signs, (first, last) = self._feed_edges(feed)
+            if isolated[first] or isolated[last] or piece[first] != piece[last]:
+                raise ValueError(
+                    f"feed {feed.name!r}: its terminals must be inside the metal of"
+                    " one conductor (or one Dirichlet wall)"
+                )
+            np.add.at(source, edges, signs)
+        return source
 
     def _edge_conductivity(
         self, background: PointField | None
@@ -438,6 +543,7 @@ class InductiveField3D:
         *,
         frequency: float,
         coils: Sequence[Coil3D] = (),
+        feeds: Sequence[Feed3D] = (),
         conductors: Sequence[Conductor3D] = (),
         conductivity: PointField | None = None,
         samples: int = 1,
@@ -446,6 +552,7 @@ class InductiveField3D:
         cut_cells: bool = True,
         min_air_fraction: float = 0.01,
         min_sine: float = 0.1,
+        cut_cell_samples: int = 64,
     ) -> None:
         """Sample the coils and conductors on the grid and assemble the operator."""
         if frequency <= 0.0:
@@ -467,7 +574,7 @@ class InductiveField3D:
             raise ValueError("min_air_fraction must be in (0, 1]")
         self.min_air_fraction = float(min_air_fraction)
         self._surfaces = [
-            cut_cells_of(grid, c.shapes, min_sine=min_sine)
+            cut_cells_of(grid, c.shapes, min_sine=min_sine, samples=cut_cell_samples)
             if self.cut_cells
             else staircased_cells(grid, c.shapes)
             for c in self.impedance_conductors
@@ -486,6 +593,8 @@ class InductiveField3D:
                 volume |= edges
         if np.any(volume & (self.edge_air < 1.0)):
             raise ValueError("volume conductors must not touch impedance conductors")
+        self.feeds = tuple(feeds)
+        self._unit_source = self._unit_source + self._feed_source()
         self._factorizations: dict[float, Any] = {}
         self._preconditioners: dict[float, Any] = {}
         self._order: np.ndarray | None = None

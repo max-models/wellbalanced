@@ -71,6 +71,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from methodcard import Rule, method
+from plasmacoll.units import convert_units, to_unit, unit_field
 from scipy.constants import mu_0 as MU_0
 
 from wellbalanced.spatial.cutcell import cut_cells as cut_cells_of
@@ -105,14 +106,19 @@ class Coil3D:
     Attributes:
         shape: The region (anything with ``contains_points`` of ``(3, n)`` points).
         direction: The direction of ``T``, the axis the current circulates around.
-        turns_per_length: Turns per metre along ``direction`` [1/m].
+        turns_per_length: Turns per metre along ``direction`` [1/m]: an astropy
+            Quantity, a string such as ``"100 / m"`` or a number in 1/m.
         name: A label.
     """
 
     shape: Any
     direction: tuple[float, float, float] = (0.0, 0.0, 1.0)
-    turns_per_length: float = 1.0
+    turns_per_length: float = unit_field("1/m", 1.0)
     name: str = ""
+
+    def __post_init__(self) -> None:
+        """Convert the turns per length to 1/m."""
+        convert_units(self)
 
 
 @dataclass(frozen=True)
@@ -148,13 +154,18 @@ class Conductor3D:
 
     Attributes:
         shapes: The shapes it is made of (Booleans for slits, e.g. ``tube - box``).
-        conductivity: ``sigma`` [S/m], real for a metal.
+        conductivity: ``sigma`` [S/m], real for a metal: an astropy Quantity, a
+            string such as ``"5.8e7 S/m"`` or a number in S/m.
         name: A label for `InductiveSolution3D.conductor_losses`.
     """
 
     shapes: Sequence[Any]
-    conductivity: float
+    conductivity: float = field(metadata={"unit": "S/m"})
     name: str = ""
+
+    def __post_init__(self) -> None:
+        """Convert the conductivity to S/m."""
+        convert_units(self)
 
 
 def _impedance_rules() -> dict:
@@ -199,13 +210,18 @@ class ImpedanceConductor3D:
 
     Attributes:
         shapes: The shapes it is made of (their union; Booleans for slits).
-        conductivity: ``sigma`` [S/m].
+        conductivity: ``sigma`` [S/m]: an astropy Quantity, a string such as
+            ``"5.8e7 S/m"`` or a number in S/m.
         name: A label for `InductiveSolution3D.conductor_losses`.
     """
 
     shapes: Sequence[Any]
-    conductivity: float
+    conductivity: float = field(metadata={"unit": "S/m"})
     name: str = ""
+
+    def __post_init__(self) -> None:
+        """Convert the conductivity to S/m."""
+        convert_units(self)
 
     def surface_impedance(self, frequency: float) -> complex:
         """``Z_s = (1 + i) sqrt(omega mu0 / (2 sigma))`` [Ohm]."""
@@ -358,7 +374,8 @@ class InductiveField3D:
 
     Args:
         grid: The edge grid (its boundaries are the field's).
-        frequency: The frequency [Hz].
+        frequency: The frequency [Hz]: an astropy Quantity, a string such as
+            ``"1 MHz"`` or a number in Hz.
         coils: The coils, all carrying the coil current.
         feeds: Current sources along grid edges (`Feed3D`), also carrying the
             coil current: the terminals of coils of real wire, modelled as
@@ -555,6 +572,7 @@ class InductiveField3D:
         cut_cell_samples: int = 64,
     ) -> None:
         """Sample the coils and conductors on the grid and assemble the operator."""
+        frequency = to_unit(frequency, "Hz", "frequency")
         if frequency <= 0.0:
             raise ValueError("frequency must be positive")
         if regularization <= 0.0:

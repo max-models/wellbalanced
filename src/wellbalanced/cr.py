@@ -31,6 +31,7 @@ import numpy as np
 from methodcard import method
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS
 from plasmacoll.hydrogen_elastic import ELASTIC_FITS
+from plasmacoll.units import to_unit
 
 from wellbalanced.reactions import Reaction
 
@@ -143,7 +144,12 @@ def opencr_hydrogen_reactions(
             (D, D+, D2, D2+, D3+) and the elastic masses doubled, the rate
             coefficients are hydrogen's (the isotope shifts of the vibrational
             levels are neglected).
+
+    ``electron_density`` and ``dissociation_heating`` also take astropy
+    Quantities or strings such as ``"1e11 cm^-3"``.
     """
+    electron_density = to_unit(electron_density, "m^-3", "electron_density")
+    dissociation_heating = to_unit(dissociation_heating, "eV", "dissociation_heating")
     if isotope not in ("H", "D"):
         raise ValueError("isotope must be 'H' or 'D'")
     opencr = _opencr()

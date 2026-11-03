@@ -24,6 +24,7 @@ import numpy as np
 from methodcard import Rule, method
 from plasmacoll import CollisionProcess, CrossSection, RateTable
 from plasmacoll.constants import ELECTRON_MASS
+from plasmacoll.units import convert_units, to_unit, unit_field
 
 __all__ = ["TEMPERATURES", "Reaction"]
 
@@ -83,21 +84,29 @@ class Reaction:
         elastic_mass: For an elastic electron collision, the target mass in kg:
             the electrons then lose ``3 (m_e / M) (T_e - T_g)`` per collision.
         name: A name for diagnostics; built from the equation if empty.
+
+    The energies, the mass and a constant rate take astropy Quantities,
+    strings such as ``"15.76 eV"`` or numbers in the units above (a constant
+    rate in m^(3(k-1))/s for ``k`` reactants).
     """
 
     reactants: Sequence[str]
     products: Sequence[str]
     rate: float | RateTable | RateFunction
     temperature: str = "electron"
-    electron_energy_loss: float = 0.0
-    gas_heating: float = 0.0
-    elastic_mass: float | None = None
+    electron_energy_loss: float = unit_field("eV", 0.0)
+    gas_heating: float = unit_field("eV", 0.0)
+    elastic_mass: float | None = unit_field("kg", None)
     name: str = ""
     _counts: dict[str, int] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Validate the reaction and fill in its name."""
+        convert_units(self)
         object.__setattr__(self, "reactants", tuple(self.reactants))
+        if not callable(self.rate):
+            unit = f"m^{3 * (len(self.reactants) - 1)} / s"
+            object.__setattr__(self, "rate", to_unit(self.rate, unit, "rate"))
         object.__setattr__(self, "products", tuple(self.products))
         if not self.reactants:
             raise ValueError("a reaction needs at least one reactant")
@@ -185,11 +194,14 @@ class Reaction:
         """A reaction whose rate is ``cross_section`` averaged over a Maxwellian.
 
         ``reduced_mass`` (kg) is the electron mass for electron impact;
-        ``incident_mass`` is needed for a table in the lab frame (see
-        `plasmacoll.rate_coefficient`).
+        ``incident_mass`` (kg) is needed for a table in the lab frame (see
+        `plasmacoll.rate_coefficient`). The masses and energies also take
+        Quantities or strings such as ``"1 u"``.
         """
         table = RateTable.from_cross_section(
-            cross_section, reduced_mass, incident_mass=incident_mass
+            cross_section,
+            to_unit(reduced_mass, "kg", "reduced_mass"),
+            incident_mass=to_unit(incident_mass, "kg", "incident_mass"),
         )
         return cls(
             reactants,
@@ -227,8 +239,11 @@ class Reaction:
         The reactants and products are given here, since a process only names
         the species it tracks. ``target_mass`` (kg) gives the reduced mass and,
         for an elastic process, the energy transfer; without it the target is
-        taken as infinitely heavy.
+        taken as infinitely heavy. The masses also take Quantities or strings
+        such as ``"2 u"``.
         """
+        incident_mass = to_unit(incident_mass, "kg", "incident_mass")
+        target_mass = to_unit(target_mass, "kg", "target_mass")
         mu = (
             incident_mass
             if target_mass is None

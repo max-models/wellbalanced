@@ -89,6 +89,13 @@ import numpy as np
 import xarray as xr
 from methodcard import ConvergenceProblem, Rule, method
 from plasmacoll.constants import ATOMIC_MASS, BOLTZMANN, ELEMENTARY_CHARGE
+from plasmacoll.units import (
+    convert_units,
+    is_quantity,
+    to_array,
+    to_unit,
+    unit_field,
+)
 from scope_profiler import profile, region
 
 from wellbalanced._profiling import _PROFILE_TAGS
@@ -173,7 +180,15 @@ def binary_diffusion(
         diameter: The collision diameter in m.
         temperature: The gas temperature in K.
         pressure: The total pressure in Pa.
+
+    Each also takes an astropy Quantity or a string such as ``"1 Pa"``; the
+    temperature and pressure may be arrays.
     """
+    mass_a = to_unit(mass_a, "kg", "mass_a")
+    mass_b = to_unit(mass_b, "kg", "mass_b")
+    diameter = to_unit(diameter, "m", "diameter")
+    temperature = to_array(temperature, "K", "temperature")
+    pressure = to_array(pressure, "Pa", "pressure")
     reduced = mass_a * mass_b / (mass_a + mass_b)
     density = pressure / (BOLTZMANN * temperature)
     return (
@@ -203,20 +218,28 @@ class Boundary:
             ``E / 2k``).
         metal_sticking: The probability that a metal atom that reaches the wall sticks.
         pressure: The pressure of the fill gas of an inflow in Pa.
+
+    The physical settings take astropy Quantities or strings such as
+    ``"300 K"`` or ``"1 Pa"`` too, converted when the boundary is made.
     """
 
     kind: str
-    temperature: float | None = None
+    temperature: float | None = unit_field("K", None)
     accommodation: float = 1.0
     gas_return_flux: float | np.ndarray = 0.0
-    gas_return_temperature: float | None = None
+    gas_return_temperature: float | None = unit_field("K", None)
     metal_flux: float | np.ndarray = 0.0
-    metal_energy: float = 5.0
+    metal_energy: float = unit_field("eV", 5.0)
     metal_sticking: float = 0.0
-    pressure: float | None = None
+    pressure: float | None = unit_field("Pa", None)
 
     def __post_init__(self) -> None:
-        """Validate the kind."""
+        """Convert the units and validate the kind."""
+        convert_units(self)
+        self.gas_return_flux = to_array(
+            self.gas_return_flux, "m^-2 / s", "gas_return_flux"
+        )
+        self.metal_flux = to_array(self.metal_flux, "m^-2 / s", "metal_flux")
         if self.kind not in _KINDS:
             raise ValueError(f"the kind of a boundary is one of {_KINDS}")
 
@@ -272,12 +295,20 @@ class VolumeSource:
         rate: Atoms per m^3 and s: a number or an array of the grid's shape.
         temperature: The temperature in K they are created at.
         velocity: Their velocity ``(u, v)`` in m/s.
+
+    The physical settings take astropy Quantities or strings such as
+    ``"300 K"`` too.
     """
 
     species: str
     rate: float | np.ndarray
-    temperature: float = 300.0
-    velocity: tuple[float, float] = (0.0, 0.0)
+    temperature: float = unit_field("K", 300.0)
+    velocity: tuple[float, float] = unit_field("m / s", (0.0, 0.0))
+
+    def __post_init__(self) -> None:
+        """Convert the units."""
+        convert_units(self)
+        self.rate = to_array(self.rate, "m^-3 / s", "rate")
 
 
 @dataclass
@@ -296,12 +327,25 @@ class IonExchange:
             (``n_i sigma v``); a number or an array of the grid's shape.
         ion_velocity: The ions' mean velocity ``(u_i, v_i)``, m/s (numbers or arrays).
         ion_temperature: The ion temperature in K.
+
+    The physical settings take astropy Quantities or strings such as
+    ``"0.1 eV"`` too.
     """
 
     species: str
     frequency: float | np.ndarray
     ion_velocity: tuple[float | np.ndarray, float | np.ndarray] = (0.0, 0.0)
     ion_temperature: float | np.ndarray = 300.0
+
+    def __post_init__(self) -> None:
+        """Convert the units."""
+        self.frequency = to_array(self.frequency, "1 / s", "frequency")
+        if isinstance(self.ion_velocity, str) or is_quantity(self.ion_velocity):
+            self.ion_velocity = to_array(self.ion_velocity, "m / s", "ion_velocity")
+        self.ion_velocity = tuple(
+            to_array(u, "m / s", "ion_velocity") for u in self.ion_velocity
+        )
+        self.ion_temperature = to_array(self.ion_temperature, "K", "ion_temperature")
 
 
 @dataclass
@@ -319,10 +363,17 @@ class ThermalRelaxation:
     Attributes:
         frequency: The relaxation frequency ``nu`` in 1/s: a number or an array.
         temperature: The temperature ``T_w`` of the walls in K.
+
+    Both take astropy Quantities or strings such as ``"1e4 1/s"`` too.
     """
 
     frequency: float | np.ndarray
-    temperature: float = 300.0
+    temperature: float = unit_field("K", 300.0)
+
+    def __post_init__(self) -> None:
+        """Convert the units."""
+        convert_units(self)
+        self.frequency = to_array(self.frequency, "1 / s", "frequency")
 
 
 @dataclass(frozen=True)
@@ -640,6 +691,10 @@ class GasDynamics:
         cfl: The Courant number of the hyperbolic step.
         source_cfl: The largest share of the content of a cell that a wall emission, a
             source or a sink may add or remove in one step.
+
+    The physical arguments (the lengths, masses, and a diffusion coefficient or
+    conductivity that is a number) take astropy Quantities or strings such as
+    ``"5 cm"`` or ``"47.867 u"`` too.
     """
 
     def __init__(
@@ -660,6 +715,16 @@ class GasDynamics:
         source_cfl: float = 0.2,
     ) -> None:
         """Set up the grid and the closures; the gas is empty until `set_state`."""
+        length = to_unit(length, "m", "length")
+        width = to_unit(width, "m", "width")
+        gas_mass = to_unit(gas_mass, "kg", "gas_mass")
+        metal_mass = to_unit(metal_mass, "kg", "metal_mass")
+        if not callable(diffusion):
+            diffusion = to_unit(diffusion, "m^2 / s", "diffusion")
+        if not callable(thermal_conductivity):
+            thermal_conductivity = to_unit(
+                thermal_conductivity, "W / (m K)", "thermal_conductivity"
+            )
         if length <= 0.0 or width <= 0.0 or cells < 2 or cells_y < 1:
             raise ValueError("a positive domain, at least 2 cells along x")
         if limiter not in LIMITERS:
@@ -719,8 +784,15 @@ class GasDynamics:
         """Set the gas: mass densities (kg/m^3), velocities (m/s) and the pressure (Pa).
 
         Each is a number, an array of ``(nx,)`` along ``x`` (``(nx, 1)`` is also
-        accepted) or of the grid's shape.
+        accepted) or of the grid's shape, or an astropy Quantity or a string
+        such as ``"1 Pa"``; ``time`` is in s.
         """
+        gas_density = to_array(gas_density, "kg / m^3", "gas_density")
+        metal_density = to_array(metal_density, "kg / m^3", "metal_density")
+        u = to_array(u, "m / s", "u")
+        v = to_array(v, "m / s", "v")
+        pressure = to_array(pressure, "Pa", "pressure")
+        time = to_unit(time, "s", "time")
         shape = (self.nx, self.ny)
 
         def full(value: float | np.ndarray) -> np.ndarray:
@@ -749,7 +821,13 @@ class GasDynamics:
     def set_uniform(
         self, pressure: float, temperature: float, metal_fraction: float = 0.0
     ) -> None:
-        """A gas at rest of one pressure, temperature and metal mass fraction."""
+        """A gas at rest of one pressure (Pa), temperature (K) and metal mass fraction.
+
+        The pressure and temperature take Quantities or strings such as
+        ``"300 K"`` too.
+        """
+        pressure = to_unit(pressure, "Pa", "pressure")
+        temperature = to_unit(temperature, "K", "temperature")
         m_g, m_m = self.masses["gas"], self.masses["metal"]
         mean_inverse_mass = (1.0 - metal_fraction) / m_g + metal_fraction / m_m
         rho = pressure / (BOLTZMANN * temperature * mean_inverse_mass)
@@ -1238,7 +1316,10 @@ class GasDynamics:
             t_end: The end time in s.
             callback: Called with the model after every ``every`` steps.
             every: The interval of the callback in steps.
+
+        ``t_end`` also takes a Quantity or a string such as ``"10 us"``.
         """
+        t_end = to_unit(t_end, "s", "t_end")
         self._check_ready()
         while self.time < t_end * (1.0 - 1.0e-12):
             dt = min(self.stable_step(), t_end - self.time)

@@ -28,7 +28,8 @@ with a probability (recombination, quenching) at a quarter of their mean speed
 and returned as products.
 
 All temperatures are in eV, densities in m^-3, rates in m^-3 s^-1 and powers in
-W. The steady state is found by integrating the balances in the logarithms of
+W. Every physical setting also takes an astropy Quantity or a string such as
+``"300 K"`` or ``"1 Pa"``, converted to these units. The steady state is found by integrating the balances in the logarithms of
 the densities and temperatures (they stay positive) with an implicit method,
 then refining it with a root finder: `GlobalModel.steady_state`.
 """
@@ -44,6 +45,7 @@ import numpy as np
 import xarray as xr
 from methodcard import Rule, method
 from plasmacoll.constants import BOLTZMANN, ELECTRON_MASS, ELEMENTARY_CHARGE
+from plasmacoll.units import convert_units, to_array, to_unit, unit_field
 from scipy.integrate import solve_ivp
 from scipy.optimize import root
 from scope_profiler import profile
@@ -98,14 +100,17 @@ class Cusp:
     ``line_length`` (m) is the total length of the cusp lines, ``field`` (T) the
     field at the wall. The ions leave through a strip of the hybrid leak width
     ``w = 4 sqrt(rho_e rho_i)`` along the lines, with ``rho = sqrt(m T) / (e B)``
-    the gyroradius at the thermal speed ``sqrt(T / m)``.
+    the gyroradius at the thermal speed ``sqrt(T / m)``. Both take Quantities
+    or strings such as ``"50 mT"`` too.
     """
 
-    field: float
-    line_length: float
+    # dataclasses.field: the name field is the cusp's field here
+    field: float = dataclasses.field(metadata={"unit": "T"})
+    line_length: float = dataclasses.field(metadata={"unit": "m"})
 
     def __post_init__(self) -> None:
         """Validate the cusp."""
+        convert_units(self)
         if self.field <= 0.0 or self.line_length < 0.0:
             raise ValueError("a cusp needs field > 0 and line_length >= 0")
 
@@ -178,16 +183,19 @@ class Chamber:
             the whole wall if ``None``.
         h_factor: The edge-to-centre density ratio at that area.
         cusp: Magnetic cusps through which ions leave as well.
+
+    The volume and areas take Quantities or strings such as ``"1 L"`` too.
     """
 
-    volume: float
-    wall_area: float
-    ion_loss_area: float | None = None
+    volume: float = field(metadata={"unit": "m^3"})
+    wall_area: float = field(metadata={"unit": "m^2"})
+    ion_loss_area: float | None = unit_field("m^2", None)
     h_factor: float = 1.0
     cusp: Cusp | None = None
 
     def __post_init__(self) -> None:
         """Validate the chamber."""
+        convert_units(self)
         if self.volume <= 0.0 or self.wall_area <= 0.0:
             raise ValueError("a chamber needs volume > 0 and wall_area > 0")
         if not 0.0 < self.h_factor <= 1.0:
@@ -234,19 +242,22 @@ class GasTemperature:
     """The gas temperature as a balance: heating by the reactions against conduction.
 
     The conduction loss is ``kappa (T_g - T_w) / Lambda^2`` (W/m^3), with the
-    thermal conductivity ``kappa`` (W/m/K) and the diffusion length ``Lambda``
-    (m) of the chamber. ``heat_capacity`` is the heat capacity per particle in
-    units of ``k`` (3/2 for atoms, 5/2 for diatomic molecules), which only sets
-    how fast the temperature moves towards its steady state.
+    wall temperature ``T_w`` (eV), the thermal conductivity ``kappa`` (W/m/K)
+    and the diffusion length ``Lambda`` (m) of the chamber. ``heat_capacity``
+    is the heat capacity per particle in units of ``k`` (3/2 for atoms, 5/2
+    for diatomic molecules), which only sets how fast the temperature moves
+    towards its steady state. The physical settings take Quantities or strings
+    such as ``"300 K"`` too.
     """
 
-    wall_temperature: float
-    conductivity: float
-    diffusion_length: float
+    wall_temperature: float = field(metadata={"unit": "eV"})
+    conductivity: float = field(metadata={"unit": "W / (m K)"})
+    diffusion_length: float = field(metadata={"unit": "m"})
     heat_capacity: float = 2.5
 
     def __post_init__(self) -> None:
         """Validate the gas model."""
+        convert_units(self)
         if min(self.wall_temperature, self.conductivity, self.diffusion_length) <= 0:
             raise ValueError("wall_temperature, conductivity and diffusion_length > 0")
 
@@ -264,17 +275,24 @@ class VolumeSource:
     ``rate(T_e, T_g)``, for a source that follows the plasma, e.g. sputtering
     by the ion flux to a target (``per = ("Ar+",)``, ``rate`` the Bohm flux
     times the yield per volume). In a `wellbalanced.Fluid1D` it may
-    also be an array on the cells, a source that varies in space.
+    also be an array on the cells, a source that varies in space. A rate that
+    is not a function, and ``electron_energy``, take Quantities or strings
+    such as ``"1e20 m^-3 s^-1"`` too (the rate in m^(3k-3)/s for ``k``
+    species in ``per``).
     """
 
     changes: Mapping[str, int]
     rate: float | np.ndarray | Callable[[float, float], float]
     per: Sequence[str] = ()
-    electron_energy: float = 0.0
+    electron_energy: float = unit_field("eV", 0.0)
     name: str = "source"
 
     def __post_init__(self) -> None:
         """Validate the source."""
+        convert_units(self)
+        if not callable(self.rate):
+            unit = f"m^{3 * len(tuple(self.per)) - 3} / s"
+            object.__setattr__(self, "rate", to_array(self.rate, unit, "rate"))
         if not callable(self.rate) and np.any(np.asarray(self.rate) < 0.0):
             raise ValueError("a source rate must be >= 0")
         object.__setattr__(self, "changes", dict(self.changes))
@@ -446,6 +464,10 @@ class GlobalModel:
         thermalize_electrons: Keep ``T_e >= T_g``. Without sources of energy the
             wall losses cool the electrons of a decaying plasma below the gas,
             which no elastic collision allows; set it for afterglows.
+
+    The physical settings (a power that is not a function, the fixed
+    densities, the feed, the pumping speed and a fixed gas temperature) take
+    Quantities or strings such as ``"100 W"`` or ``"300 K"`` too.
     """
 
     species: Sequence[Species]
@@ -454,7 +476,7 @@ class GlobalModel:
     power: float | Callable[[float], float] = 0.0
     fixed: Mapping[str, float] = field(default_factory=dict)
     feed: Mapping[str, float] = field(default_factory=dict)
-    pumping_speed: float = 0.0
+    pumping_speed: float = unit_field("m^3 / s", 0.0)
     sources: Sequence[VolumeSource] = ()
     wall_reactions: Sequence[WallReaction] = ()
     ion_wall_products: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
@@ -463,6 +485,19 @@ class GlobalModel:
 
     def __post_init__(self) -> None:
         """Check that every name refers to a species and index the unknowns."""
+        convert_units(self)
+        if not callable(self.power):
+            self.power = to_unit(self.power, "W", "power")
+        self.fixed = {
+            k: to_array(v, "m^-3", f"fixed[{k!r}]") for k, v in self.fixed.items()
+        }
+        self.feed = {
+            k: to_unit(v, "1 / s", f"feed[{k!r}]") for k, v in self.feed.items()
+        }
+        if not isinstance(self.gas_temperature, GasTemperature):
+            self.gas_temperature = to_unit(
+                self.gas_temperature, "eV", "gas_temperature"
+            )
         names = [s.name for s in self.species]
         if len(set(names)) != len(names):
             raise ValueError("species names must be unique")
@@ -814,9 +849,11 @@ class GlobalModel:
         `steady_state`) with an implicit method, driven by ``power(t)`` if
         that is a function. Stop at every ``breakpoints`` time inside the
         interval, where the drive jumps (the edges of a pulse), so the step
-        size does not have to find them.
+        size does not have to find them. The times also take Quantities or
+        strings such as ``"[0, 1, 2] us"``.
         """
-        times = np.asarray(times, dtype=float)
+        times = np.asarray(to_array(times, "s", "times"), dtype=float)
+        breakpoints = to_unit(breakpoints, "s", "breakpoints")
         if times.ndim != 1 or len(times) < 2 or np.any(np.diff(times) <= 0.0):
             raise ValueError("times must be a strictly increasing 1D sequence")
         edges = sorted({float(b) for b in breakpoints if times[0] < b < times[-1]})

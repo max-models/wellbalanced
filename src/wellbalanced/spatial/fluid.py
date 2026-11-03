@@ -123,6 +123,7 @@ import scipy.sparse.linalg as spla
 import xarray as xr
 from methodcard import ConvergenceProblem, method
 from plasmacoll.constants import ELECTRON_MASS, ELEMENTARY_CHARGE
+from plasmacoll.units import to_array, to_unit
 from scope_profiler import profile
 
 from wellbalanced._profiling import _PROFILE_TAGS
@@ -358,6 +359,10 @@ class Fluid2D:
             path, charge exchange; ``v_th`` the mean thermal speed at ``T_g``), the drag
             of the global model's edge-to-centre ratios, instead of ``e / (M mu)``.
         wall_potential: The potential of the walls [V].
+
+    The physical settings take astropy Quantities, strings such as ``"0.1 eV"``,
+    ``"300 K"`` or ``"1e20 m^-3"``, or numbers (cell fields) in the units given; so do
+    the densities and the temperature of `set_gas`.
     """
 
     def _coarse_fine_stencils(self, faces, inner: np.ndarray, index: np.ndarray):
@@ -521,6 +526,26 @@ class Fluid2D:
         wall_potential: float = 0.0,
     ) -> None:
         """Index the plasma cells, their faces and the unknowns; check the species."""
+        gas_temperature = to_unit(gas_temperature, "eV", "gas_temperature")
+        electron_temperature = to_unit(
+            electron_temperature, "eV", "electron_temperature"
+        )
+        wall_potential = to_unit(wall_potential, "V", "wall_potential")
+        ion_mean_free_path = to_unit(ion_mean_free_path, "m", "ion_mean_free_path")
+        fixed = {
+            name: to_array(value, "m^-3", f"fixed[{name!r}]")
+            for name, value in (fixed or {}).items()
+        }
+        sources = {
+            name: to_array(value, "m^-3 s^-1", f"sources[{name!r}]")
+            for name, value in (sources or {}).items()
+        }
+        heating = to_array(heating, "W/m^3", "heating")
+        if electron_force is not None:
+            electron_force = (
+                to_array(electron_force[0], "N", "electron_force"),
+                to_array(electron_force[1], "N", "electron_force"),
+            )
         if potential not in ("quasineutral", "poisson"):
             raise ValueError(f"unknown potential closure {potential!r}")
         if ions is None:
@@ -1291,7 +1316,9 @@ class Fluid2D:
         for name, value in (densities or {}).items():
             if name not in self._fixed:
                 raise ValueError(f"{name!r} is not a fixed species")
+            value = to_array(value, "m^-3", f"densities[{name!r}]")
             self._fixed[name] = self._on_cells(value)
+        temperature = to_unit(temperature, "eV", "temperature")
         if temperature is not None:
             if temperature <= 0.0:
                 raise ValueError("the gas temperature must be > 0")

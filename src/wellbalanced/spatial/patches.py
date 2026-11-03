@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import scipy.sparse as sp
+from plasmacoll.units import to_array, to_unit
 
 from wellbalanced.spatial.grid import AxisBoundary, CellField, Geometry, TransportFaces
 
@@ -162,9 +163,14 @@ class PatchGrid:
         cover; or a function ``refine(x, y, level)`` of the cell centres of a level that
         is true where the next level is needed, for ``levels`` refined levels.
         patchwork's regrid covers them with properly nested patches, ``buffer`` cells
-        wider.
+        wider. ``bounds`` and the boxes are in metres, or astropy Quantities or strings
+        such as ``"[[0, 0.1], [0, 0.2]] m"``.
         """
         from patchwork import AMRHierarchy
+
+        bounds = to_unit(bounds, "m", "bounds")
+        if not callable(refine):
+            refine = to_unit(refine, "m", "refine")
 
         periodic = (boundaries[0] == "periodic", boundaries[1] == "periodic")
         hierarchy = AMRHierarchy(
@@ -217,9 +223,13 @@ class PatchGrid:
         follow its coarser spacing. A uniform axis sets the level everywhere instead (at
         least as fine as its spacing). The finest lattice is aligned with the edges'
         ends, so a tensor grid that is uniform where it is fine shares its cell faces
-        there. For comparing the two grids on one problem.
+        there. For comparing the two grids on one problem. The edges are in metres, or
+        astropy Quantities or strings such as ``"[0, 1, 2] cm"``.
         """
-        edges = [np.asarray(x_edges, dtype=float), np.asarray(y_edges, dtype=float)]
+        edges = [
+            np.asarray(to_array(x_edges, "m", "x_edges"), dtype=float),
+            np.asarray(to_array(y_edges, "m", "y_edges"), dtype=float),
+        ]
         for axis_edges in edges:
             if axis_edges.ndim != 1 or axis_edges.size < 2:
                 raise ValueError("cell edges must be 1D, at least two")

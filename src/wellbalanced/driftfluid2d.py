@@ -62,31 +62,31 @@ discrete Poisson equation exactly; ``stationary_sources`` hold an equilibrium; e
 of the discrete operator matches its analytic form to under 1 % (electron Hall flux with
 a density gradient, ion continuity and momentum); and in a uniform plasma periodic in
 ``x`` (``periodic_x``, ``field_bc``) the time-domain growth rate and phase speed of an
-``x``-uniform mode agree with :func:`uniform_plasma_roots`, the full-Poisson local
+``x``-uniform mode agree with `uniform_plasma_roots`, the full-Poisson local
 dispersion relation, to under 4 % (0.5 % in the eigenvalues of the semi-discrete operator, at
 32 cells per wavelength, converging with resolution). What is not verified: the
 gradient-drift growth rate in a bounded box. The local WKB relation
-:func:`gradient_drift_roots` assumes a mode uniform along ``x``, which electrodes forbid:
+`gradient_drift_roots` assumes a mode uniform along ``x``, which electrodes forbid:
 the eigenmodes of a box are waves along ``x`` with their own rates, several times
 different from the local ones (the quasi-neutral form is also far off, because the
 E x B-driven branch sits on a near cancellation that the few-percent Debye correction moves).
 
-Linear stability: :meth:`DriftFluid2D.linear_modes` builds the Jacobian of the discretised operator
+Linear stability: `DriftFluid2D.linear_modes` builds the Jacobian of the discretised operator
 about a y-uniform state for one azimuthal mode, x-resolved, so the electrodes, the gradients, the Hall
 tensor and the energy equation are in it, and returns its eigenvalues and eigenvectors. Its leading
-eigenvalue is meant to agree with :func:`uniform_plasma_roots` for a uniform plasma and with a
+eigenvalue is meant to agree with `uniform_plasma_roots` for a uniform plasma and with a
 time-domain run fitted in its exponential-growth window (tests in ``test_driftfluid2d.py``). On the
 relaxed 1D state of Boeuf's case (gallery study 07) the two agree to 5 % in the growth rate, and the
 leading mode is not Boeuf's: it is driven by the ionization response (frozen, the rate falls tenfold),
 grows at 1-3e6 /s at all wavelengths and hardly propagates (a few km/s, either sign), while his
 linear phase is a gradient-drift wave at 1e7 /s, 1.6 cm, +17 km/s. The cause is the 1D state:
 its density falls towards the anode over ``L_n`` of about -5 mm at ``x = 1.8`` cm (converged
-in ``nx``) against his -2.2 mm, and :func:`boeuf_dispersion_roots` with that ``L_n`` grows a
+in ``nx``) against his -2.2 mm, and `boeuf_dispersion_roots` with that ``L_n`` grows a
 hundred times slower.
 
-Analytic reference: :func:`uniform_plasma_roots` and :func:`gradient_drift_roots` are the
+Analytic reference: `uniform_plasma_roots` and `gradient_drift_roots` are the
 local dispersion relations of this system (without and with a density gradient), and
-:func:`boeuf_dispersion_roots` is Boeuf's (with finite Larmor radius and the grad-B drift).
+`boeuf_dispersion_roots` is Boeuf's (with finite Larmor radius and the grad-B drift).
 
 PLACEHOLDERS, to be checked against the sources before any physical claim: the three
 argon rate fits (ionization, excitation, momentum transfer: quoted from memory of
@@ -109,6 +109,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import xarray as xr
+from methodcard import ConvergenceProblem, Rule, method
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
 from scope_profiler import profile
 
@@ -151,17 +152,62 @@ def _bounded(te: np.ndarray | float) -> np.ndarray | float:
     return np.clip(te, *RATE_TE_RANGE)
 
 
+def _fit_rules(a: str, power: str, energy: str) -> dict:
+    """The SymPy rule of an Arrhenius-like fit ``a T^power exp(-energy / T)``."""
+    import sympy
+
+    te = sympy.Symbol("te", positive=True)
+    rule = (
+        sympy.Float(a) * te ** sympy.Float(power) * sympy.exp(-sympy.Float(energy) / te)
+    )
+    return {"rate": Rule(rule, ranges={"te": (1.0, 50.0)})}
+
+
+def _momentum_rules() -> dict:
+    """The SymPy rule of `argon_momentum_rate` (for the tests)."""
+    import sympy
+
+    te = sympy.Symbol("te", positive=True)
+    log = sympy.log(te)
+    rule = sympy.Float("2.336e-14") * sympy.exp(
+        sympy.Float("1.609") * log
+        + sympy.Float("0.0618") * log**2
+        - sympy.Float("0.1171") * log**3
+    )
+    return {"rate": Rule(rule, ranges={"te": (1.0, 50.0)})}
+
+
+@method(
+    equations={
+        "rate": r"K_\mathrm{iz} = 2.34\times10^{-14}\, T_e^{0.59}\, e^{-17.44/T_e} \quad [\mathrm{m^3/s}]",
+    },
+    assumptions=(
+        r"PLACEHOLDER: the fit as remembered from Lieberman and Lichtenberg, the same as `wellbalanced.magnetron.argon_ionization`",
+        r"$T_e$ held within 0.5–100 eV (`RATE_TE_RANGE`)",
+    ),
+    symbolic=lambda: _fit_rules("2.34e-14", "0.59", "17.44"),
+)
 def argon_ionization_rate(te: np.ndarray | float) -> np.ndarray | float:
     """Ionization rate coefficient of argon at a Maxwellian ``T_e`` (eV), m^3/s.
 
     PLACEHOLDER: ``2.34e-14 T_e^0.59 exp(-17.44 / T_e)``, the fit as remembered from
     Lieberman and Lichtenberg's textbook; check it against the plasmacoll cross
-    section before use. ``T_e`` is bounded to :data:`RATE_TE_RANGE`.
+    section before use. ``T_e`` is bounded to `RATE_TE_RANGE`.
     """
     te = _bounded(te)
     return 2.34e-14 * te**0.59 * np.exp(-17.44 / te)
 
 
+@method(
+    equations={
+        "rate": r"K_\mathrm{ex} = 2.48\times10^{-14}\, T_e^{0.33}\, e^{-12.78/T_e} \quad [\mathrm{m^3/s}], \qquad \varepsilon_\mathrm{ex} = 11.56\ \mathrm{eV}",
+    },
+    assumptions=(
+        r"PLACEHOLDER: one lumped level, the fit of `wellbalanced.magnetron.argon_excitation`",
+        r"$T_e$ held within 0.5–100 eV (`RATE_TE_RANGE`)",
+    ),
+    symbolic=lambda: _fit_rules("2.48e-14", "0.33", "12.78"),
+)
 def argon_excitation_rate(te: np.ndarray | float) -> np.ndarray | float:
     """Excitation rate coefficient of argon (lumped, ``11.56 eV``), m^3/s.
 
@@ -172,6 +218,16 @@ def argon_excitation_rate(te: np.ndarray | float) -> np.ndarray | float:
     return 2.48e-14 * te**0.33 * np.exp(-12.78 / te)
 
 
+@method(
+    equations={
+        "rate": r"k_{en} = 2.336\times10^{-14} \exp\!\left(1.609 \ln T_e + 0.0618 \ln^2 T_e - 0.1171 \ln^3 T_e\right) \quad [\mathrm{m^3/s}]",
+    },
+    assumptions=(
+        r"PLACEHOLDER: the elastic fit of `wellbalanced.magnetron.argon_elastic` as a momentum-transfer rate; $1.3\times10^{-13}$ m³/s at 3 eV",
+        r"$T_e$ held within 0.5–100 eV (`RATE_TE_RANGE`)",
+    ),
+    symbolic=_momentum_rules,
+)
 def argon_momentum_rate(te: np.ndarray | float) -> np.ndarray | float:
     """Electron-argon momentum-transfer rate coefficient at ``T_e`` (eV), m^3/s.
 
@@ -279,7 +335,7 @@ class ModeFit:
 
 @dataclass
 class Run:
-    """The record of :meth:`DriftFluid2D.run`.
+    """The record of `DriftFluid2D.run`.
 
     Attributes:
         times: Recording times (s).
@@ -370,7 +426,7 @@ def fit_mode(
 
     Args:
         times: The recording times (s).
-        amplitudes: :func:`mode_amplitudes` at those times.
+        amplitudes: `mode_amplitudes` at those times.
         mode: The mode number ``m``.
         length_y: The azimuthal period (m).
         window: ``(t0, t1)`` to fit in; the whole record by default.
@@ -390,7 +446,7 @@ def fit_mode(
 
 
 def spoke_report(run: Run, window: tuple[float, float] | None = None) -> SpokeReport:
-    """The :class:`SpokeReport` of a run over a time window (the last half by default)."""
+    """The `SpokeReport` of a run over a time window (the last half by default)."""
     t = run.times
     window = (0.5 * (t[0] + t[-1]), t[-1]) if window is None else window
     select = (t >= window[0]) & (t <= window[1])
@@ -443,6 +499,17 @@ def _plasma_parameters(
     return omega_ce / nu, E * nu / (ELECTRON_MASS * (nu**2 + omega_ce**2))
 
 
+@method(
+    equations={
+        "electrons": r"s\, a_e = -\left(i\mathbf k\cdot\mathbf v_{0e} + \mu_\perp k^2 T_e\right) a_e + \mu_\perp k^2\, \delta\phi, \qquad \mathbf v_{0e} = -\mu_\perp E_0 (1, h)",
+        "ions": r"s\, a_i = -i\mathbf k\cdot\mathbf v_{0i}\, a_i - i\mathbf k\cdot\mathbf v, \qquad s\,\mathbf v = -(\nu_i + i\mathbf k\cdot\mathbf v_{0i})\mathbf v - i\frac{e}{M}\mathbf k\,\delta\phi, \qquad v_{0i} = \frac{e E_0}{M\nu_i}",
+        "poisson": r"\varepsilon_0 k^2\, \delta\phi = e n_0 (a_i - a_e)",
+    },
+    assumptions=(
+        r"a uniform plasma in uniform $E_0\hat x$ and $B_z$, constant $T_e$, the model's Hall tensor (its antisymmetric part drops out of $\mathbf k\cdot R\,\mathbf k$), cold ions with friction",
+        r"$\delta n = n_0 a\, e^{i\mathbf k\cdot\mathbf r + st}$; $\mathrm{Re}\,s > 0$ grows; the eigenvalues of the $4\times4$ matrix",
+    ),
+)
 def uniform_plasma_roots(
     kx: complex,
     ky: float,
@@ -493,6 +560,17 @@ def uniform_plasma_roots(
     return np.linalg.eigvals(matrix)
 
 
+@method(
+    equations={
+        "electrons": r"s\, a_e = \left(\frac{v_{0e}}{L} - i k h v_{0e}\right) a_e + K\,(T_e a_e - \delta\phi), \qquad K = i k\left(\frac{\mu_\perp h}{L} + i k\mu_\perp\right), \qquad v_{0e} = -\mu_\perp\left(E_0 - \frac{T_e}{L}\right)",
+        "ions": r"s\, a_i = \frac{v_{0i}}{L} a_i - i k v, \qquad s\, v = -\nu_i v - i\frac{e}{M} k\,\delta\phi",
+        "closure": r"\varepsilon_0 k^2\,\delta\phi = e n_0 (a_i - a_e) \ (\text{Poisson}) \quad \text{or} \quad a_e = a_i \ (\text{quasi-neutral})",
+    },
+    assumptions=(
+        r"$n_0(x) = n_0 e^{-x/L}$ in uniform $E_0$ and $B$; WKB, $k_x = 0$, $kL$ large; $s = -i\omega$",
+        r"a bounded box forbids the mode uniform along $x$: the growth rate of a box is not this one",
+    ),
+)
 def gradient_drift_roots(
     k: float,
     gradient_length: float,
@@ -561,6 +639,20 @@ def gradient_drift_roots(
     return 1j * s
 
 
+@method(
+    equations={
+        "relation": r"\left(k^2\lambda_D^2\omega^2 - k^2 c_s^2\right)\left((1 + a)\omega - \omega_0 - \omega_D - a\omega_0 + i a\nu\right) + a\omega^3 + \left(\omega_* - \omega_D - a\omega_0 + i a\nu\right)\omega^2 = 0",
+        "frequencies": r"a = k^2\rho_e^2, \qquad \omega_0 = -\frac{k E_0}{B}, \qquad \omega_* = -\frac{k T_e}{B L_n}, \qquad \omega_D = -\frac{2 k T_e}{B L_B}",
+    },
+    assumptions=(
+        r"magnetised electrons with collisions and finite Larmor radius; unmagnetised cold collisionless ions; Poisson's equation",
+        r"$L_n = n/n'$, $L_B = B/B'$ signed (negative when falling towards the anode); `grad_b=False` drops $\omega_D$",
+        r"the drift fluid in the model field $B(x)\hat z$ gives half of $\omega_D$ (`wellbalanced.dispersion`)",
+    ),
+    references=(
+        "[Boeuf, arXiv:2211.17051](https://arxiv.org/abs/2211.17051), Eq. (1)",
+    ),
+)
 def boeuf_dispersion_roots(
     k: float,
     density: float,
@@ -646,7 +738,7 @@ def _upwind3(
 
 @dataclass
 class LinearModes:
-    """The eigenmodes of :meth:`DriftFluid2D.linear_modes`, the most unstable first.
+    """The eigenmodes of `DriftFluid2D.linear_modes`, the most unstable first.
 
     Attributes:
         mode: The azimuthal mode number ``m``.
@@ -689,6 +781,79 @@ class LinearModes:
         )
 
 
+def _ssp_problem() -> ConvergenceProblem:
+    """A uniform plasma, periodic in x and y, growing by ionization while its ions spin up.
+
+    With a constant ionization frequency and a gas that does not deplete,
+    ``n = n_0 e^(nu t)``; the ions relax to ``e E_0 / (M nu_i)`` with ``1 - e^(-nu_i t)``.
+    Both rates are ``2 / T`` and the steps resolve the drift (``dt`` below the CFL step).
+    """
+    gas, field, duration = 1.43e20, -2200.0, 6.0e-8
+    rate = 2.0 / duration
+    model = DriftFluid2D(
+        0.0048,
+        0.016,
+        4,
+        4,
+        voltage=0.0,
+        magnetic_field=0.02,
+        gas_density=gas,
+        electron_temperature=5.0,
+        momentum_rate=2e7 / gas,
+        ion_friction_rate=rate / gas,
+        ionization_rate=lambda te: rate / gas + 0.0 * te,
+        excitation_rate=None,
+        refill_rate=0.0,
+        depletion=0.0,
+        secondary_emission=0.0,
+        ion_temperature=1e-4,
+        field_bc=field,
+        periodic_x=True,
+    )
+    drift = E * field / (model.ion_mass * rate)
+
+    def error(dt: float) -> dict[str, float]:
+        state = model.initial_state(1e15)
+        steps = round(duration / dt)
+        for _ in range(steps):
+            state = model.step(state, duration / steps)
+        density = state.electron_density.mean() / (1e15 * np.exp(2.0))
+        velocity = state.ion_velocity[0].mean() / (drift * (1.0 - np.exp(-2.0)))
+        return {"density": abs(density - 1.0), "velocity": abs(velocity - 1.0)}
+
+    return ConvergenceProblem(
+        error, steps=[duration / 16, duration / 32, duration / 64]
+    )
+
+
+@method(
+    equations={
+        "electrons": r"\boldsymbol\Gamma_e = -\mu_\perp\begin{pmatrix}1 & -h \\ h & 1\end{pmatrix}\big(n\mathbf E + \nabla(n T_e)\big), \qquad h = \frac{\omega_{ce}}{\nu}, \quad \mu_\perp = \frac{e\nu}{m_e(\nu^2 + \omega_{ce}^2)}",
+        "collisions": r"\nu = k_{en}(T_e) N + \alpha\frac{\omega_{ce}}{16}\left[\frac{1}{1 + (B/B_*)^4}\right]",
+        "ions": r"\partial_t n_i + \nabla\cdot(n_i\mathbf v) = \nu_\mathrm{iz} N n_e, \qquad \partial_t\mathbf v + \mathbf v\cdot\nabla\mathbf v = \frac{e}{M}\mathbf E - k_{in} N\mathbf v - \frac{e T_i}{M n_i}\nabla n_i",
+        "gas": r"\partial_t N = -d\,\nu_\mathrm{iz} N n_e + \nu_r (N_0 - N)",
+        "energy": r"\partial_t w = -\nabla\cdot\mathbf q - s\,\boldsymbol\Gamma_e\cdot\mathbf E - 3\frac{m_e}{M}\nu_{en} n_e (T_e - T_i) - \varepsilon_\mathrm{iz} K_\mathrm{iz} N n_e - \varepsilon_\mathrm{ex} K_\mathrm{ex} N n_e",
+        "poisson": r"\varepsilon_0\nabla^2\phi = -e(n_i - n_e)",
+        "upwind3": r"n^+_{j-1/2} = \frac{-n_{j-2} + 5 n_{j-1} + 2 n_j}{6}, \qquad n^-_{j-1/2} = \frac{2 n_{j-1} + 5 n_j - n_{j+1}}{6}",
+    },
+    assumptions=(
+        r"the plane $(x, y)$, $B = B_z(x)$, periodic $y$; inertialess electrons; the energy flux the same operator on $w$ with $\tfrac53$",
+        r"cell-centred finite volumes on a uniform grid: electrons third-order upwind-biased (by the lagged drift), ions and $\mathbf v\cdot\nabla\mathbf v$ first-order upwind",
+        r"$\mu_\perp$, $h$ on the faces from the face gas and $B(x_f)$; rates held at their 0.5 and 100 eV values outside",
+        r"no electron inertia, no electron-ion or ion-ion collisions, no metal, no race-track curvature, no gas temperature",
+    ),
+    references=(
+        "[Hagelaar and Pitchford, Plasma Sources Sci. Technol. 14, 722 (2005)](https://doi.org/10.1088/0963-0252/14/4/011)",
+        "[Boeuf, arXiv:2211.17051](https://arxiv.org/abs/2211.17051)",
+    ),
+    components=(
+        argon_ionization_rate,
+        argon_excitation_rate,
+        argon_momentum_rate,
+        uniform_plasma_roots,
+        boeuf_dispersion_roots,
+    ),
+)
 @dataclass
 class DriftFluid2D:
     """The magnetron plane of the module docstring.
@@ -704,7 +869,7 @@ class DriftFluid2D:
         electron_temperature: ``T_e`` held fixed (eV), or ``None`` for the energy equation.
         momentum_rate: Electron-neutral momentum-transfer rate coefficient ``k_en`` (m^3/s),
             ``nu_en = k_en N``: a number, or a function of ``T_e`` (eV; the default is the
-            PLACEHOLDER :func:`argon_momentum_rate`).
+            PLACEHOLDER `argon_momentum_rate`).
         ion_friction_rate: Ion-neutral momentum-transfer rate coefficient (m^3/s).
             PLACEHOLDER.
         ion_mass_u: The ion mass in atomic mass units (argon).
@@ -763,7 +928,7 @@ class DriftFluid2D:
             region, where the confinement makes the discharge, keeps its classical value.
         external_sources: Volume sources added to the time derivative of an unknown
             (``"ne"``, ``"ni"``, ``"N"``, ``"vx"``, ``"vy"``, ``"w"``), numbers or arrays
-            on the cells, per unit time. :meth:`stationary_sources` returns the ones
+            on the cells, per unit time. `stationary_sources` returns the ones
             that make a given state stationary.
     """
 
@@ -1397,7 +1562,7 @@ class DriftFluid2D:
             joule = -(gcx * ecx + gcy * ecy)
             loss = self._energy_loss(ne, te, gas, gas_c)
             du["w"] = -div_q + self.heating_scale * joule - loss
-            # d(loss)/dw for the implicit treatment of the loss in :meth:`_euler`
+            # d(loss)/dw for the implicit treatment of the loss in `_euler`
             te_up = te * 1.001
             dloss = (
                 self._energy_loss(ne, te_up, gas, self._collision_gas(gas, te_up))
@@ -1424,6 +1589,16 @@ class DriftFluid2D:
         return u
 
     @profile("wellbalanced.DriftFluid2D.linear_modes", tags=_PROFILE_TAGS)
+    @method(
+        equations={
+            "jacobian": r"J_{:,j} = \frac{\mathcal R(u + \epsilon_j \cos(k y)\, e_j) + i\,\mathcal R(u + \epsilon_j\sin(k y)\, e_j) - (1 + i)\,\mathcal R(u)}{\epsilon_j} \text{ projected on } \frac{e^{-iky}}{n_y}",
+            "modes": r"J\,\hat u = s\,\hat u \quad (\texttt{numpy.linalg.eig}), \qquad \epsilon_j = 10^{-6}|u_j| \ (\text{velocities } 10^{-6}(\max|v| + 1))",
+        },
+        assumptions=(
+            r"about a $y$-uniform state made stationary by sources of its own residual; one azimuthal mode, resolved in $x$",
+            r"the potential evaluated twice, so the lagged field is the state's own; `frozen` holds $T_e$, the ionization rate or the gas",
+        ),
+    )
     def linear_modes(
         self,
         state: DriftFluid2DState,
@@ -1440,7 +1615,7 @@ class DriftFluid2D:
         real and invariant along ``y``, so the response to ``exp(i k y)`` stays in that
         mode). The electrodes, the gradients, the Hall tensor and the energy equation are
         all in it; nothing is x-uniform or local. The state is made stationary by
-        sources of its own residual (as :meth:`stationary_sources`); ``external_sources``
+        sources of its own residual (as `stationary_sources`); ``external_sources``
         are restored afterwards.
 
         ``frozen`` switches off responses, to see what each does: ``"temperature"`` (``T_e``
@@ -1570,6 +1745,20 @@ class DriftFluid2D:
         return out, phi
 
     @profile("wellbalanced.DriftFluid2D.step", tags=_PROFILE_TAGS)
+    @method(
+        equations={
+            "ssp_rk3": r"u^{(1)} = \mathcal E(u^n), \qquad u^{(2)} = \tfrac34 u^n + \tfrac14\mathcal E(u^{(1)}), \qquad u^{n+1} = \tfrac13 u^n + \tfrac23\mathcal E(u^{(2)})",
+            "implicit_permittivity": r"-\nabla\cdot\big((\varepsilon_0 + \Delta t\,\boldsymbol\sigma_e)\nabla\phi\big) = \rho - \Delta t\,\nabla\cdot\mathbf J_\mathrm{known}, \qquad \boldsymbol\sigma_e = e n\mu_\perp\begin{pmatrix}1 & -h \\ h & 1\end{pmatrix}",
+            "energy_loss": r"w^{n+1} = w + \frac{\Delta t\,\dot w}{1 + \Delta t\,\partial_w P_\mathrm{loss}}",
+        },
+        order={"density": 3, "velocity": 3},
+        assumptions=(
+            r"each stage $\mathcal E$ an Euler step with its own potential; electrode fluxes explicit in the previous stage's field, so the discrete Poisson equation of the new densities holds exactly",
+            r"`splu(COLAMD)` of the fixed pattern, reused with refinement to $10^{-12}$; densities floored at $10^3$ m$^{-3}$ (`floor_added`)",
+            r"the order is that of a uniform plasma (ionization and ion friction, rates $2/T$); the transport is limited by the CFL step",
+        ),
+        problem=_ssp_problem,
+    )
     def step(self, state: DriftFluid2DState, dt: float) -> DriftFluid2DState:
         """Advance by ``dt`` with SSP-RK3; the potential of the result is that of the last stage."""
         u0 = self._pack(state)
@@ -1581,6 +1770,15 @@ class DriftFluid2D:
         u3 = {k: u0[k] / 3.0 + 2.0 / 3.0 * u3[k] for k in u0}
         return self._unpack(u3, phi, state.time + dt)
 
+    @method(
+        equations={
+            "advection": r"\Delta t = \frac{\mathrm{cfl}}{(v_x + c_s)/\Delta x + (v_y + c_s)/\Delta y}, \qquad c_s = \sqrt{\frac{e(\max T_e + T_i)}{M}}",
+            "diffusion": r"\Delta t \le \frac{\mathrm{cfl}/2}{D\,(1/\Delta x^2 + 1/\Delta y^2)}, \qquad D = \tfrac53\max\mu_\perp\max T_e",
+        },
+        assumptions=(
+            r"$v$ the largest face drift or ion speed per axis; $\max T_e$ over the cells with $n_e > 10^{-3}\max n_e$",
+        ),
+    )
     def suggest_timestep(self, state: DriftFluid2DState, cfl: float = 0.4) -> float:
         """A step with Courant number ``cfl``: electron drift, ions, and diffusion.
 

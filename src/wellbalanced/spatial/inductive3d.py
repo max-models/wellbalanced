@@ -1,8 +1,8 @@
 """The time-harmonic magnetoquasistatic field in 3D, on the edges of a Cartesian grid.
 
-The 3D form of :class:`~wellbalanced.spatial.inductive.InductiveField2D` (step R4 of
+The 3D form of `wellbalanced.spatial.inductive.InductiveField2D` (step R4 of
 the RF-driver plan): the vector potential on the edges of a uniform
-:class:`~wellbalanced.spatial.edges.EdgeGrid` (finite integration, Yee's staggering),
+`wellbalanced.spatial.edges.EdgeGrid` (finite integration, Yee's staggering),
 in the temporal gauge (``E = -i omega A``):
 
     curl (nu curl A) + i omega sigma A = J_coil,   nu = 1 / mu0,
@@ -13,21 +13,21 @@ discretised as ``(C^T M_nu C + i omega M_sigma) a = j``, ``a`` the line integral
 edges (``L*`` and ``A*`` the dual lengths and areas) and ``j`` the coil current through
 the dual faces. The displacement current is dropped, as in 2D.
 
-Coils: :class:`Coil3D`, the current on the surface of a region, ``J = curl T`` with
+Coils: `Coil3D`, the current on the surface of a region, ``J = curl T`` with
 ``T = n I e`` inside it (``n`` turns per metre around the direction ``e``). Discretely
 ``j = C^T (T L*)``, so ``G^T j = 0`` exactly: the coil current is divergence-free on the
 grid whatever the shape. A solenoid is a cylinder with ``T`` along its axis; a
 rectangular loop is a box with ``T`` normal to the loop; the sheet sits on the region's
 staircased surface.
 
-Conductors: :class:`Conductor3D`, a conductivity on the edges inside shapes (the
+Conductors: `Conductor3D`, a conductivity on the edges inside shapes (the
 midpoint rule, staircased; or a sub-cell average, ``samples``), and a background
 ``conductivity`` (a function of the points, complex for a cold plasma). Good
 conductors whose skin depth is below the grid (copper at MHz, a Faraday shield) are
-:class:`ImpedanceConductor3D`: their inside drops out and Leontovich's ``E_t = Z_s H x n``
+`ImpedanceConductor3D`: their inside drops out and Leontovich's ``E_t = Z_s H x n``
 holds on their surface, on cut cells (Dey and Mittra's conformal faces with a surface
 impedance; the geometry from simgeometry's ``yee_fractions``,
-:mod:`~wellbalanced.spatial.cutcell`): a cut face's reluctance is
+`wellbalanced.spatial.cutcell`): a cut face's reluctance is
 ``L*_f / (mu0 A_f^air - i Z_s w_f / omega)``, ``A_f^air`` its area outside and ``w_f``
 the surface's width in it. Second order for curved surfaces, exact for planes, and a slit
 narrower than a cell keeps its gap; staircased (``cut_cells=False``) the surface is too
@@ -49,7 +49,7 @@ Solve: one sparse direct LU (SuperLU, in the grid's nested-dissection order) per
 frequency, for small grids: about a minute for 65 000 unknowns (24 x 24 x 40 cells), two
 for 130 000, and the cost grows as the square of the unknowns. Larger grids:
 ``solve(solver="iterative")``, COCG with Hiptmair and Xu's auxiliary-space
-preconditioner and a geometric multigrid (:mod:`~wellbalanced.spatial.iterative`),
+preconditioner and a geometric multigrid (`wellbalanced.spatial.iterative`),
 whose iterations hardly grow with the grid.
 
 Diagnostics: the complex power the coils deliver, ``S = 1/2 i omega a . conj(j)``, the
@@ -66,6 +66,7 @@ from typing import Any
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+from methodcard import Rule, method
 from scipy.constants import mu_0 as MU_0
 
 from wellbalanced.spatial.cutcell import cut_cells as cut_cells_of
@@ -92,7 +93,7 @@ class Coil3D:
     ``T = turns_per_length * I * direction`` inside ``shape`` and zero outside, so the
     sheet carries ``turns_per_length * I`` amperes per metre (along ``direction``),
     circulating around ``direction``. A solenoid of ``N`` turns over a length ``l`` on a
-    :class:`simgeometry.Cylinder` along ``z``: ``Coil3D(cylinder, (0, 0, 1), N / l)``; a
+    `simgeometry.Cylinder` along ``z``: ``Coil3D(cylinder, (0, 0, 1), N / l)``; a
     rectangular loop of one turn, ``w`` wide along ``y``, in the x–z plane:
     ``Coil3D(box, (0, 1, 0), 1 / w)``.
 
@@ -116,7 +117,7 @@ class Conductor3D:
     Attributes:
         shapes: The shapes it is made of (Booleans for slits, e.g. ``tube - box``).
         conductivity: ``sigma`` [S/m], real for a metal.
-        name: A label for :attr:`InductiveSolution3D.conductor_losses`.
+        name: A label for `InductiveSolution3D.conductor_losses`.
     """
 
     shapes: Sequence[Any]
@@ -124,6 +125,35 @@ class Conductor3D:
     name: str = ""
 
 
+def _impedance_rules() -> dict:
+    """The SymPy rule of the surface resistance of `ImpedanceConductor3D` (for the tests)."""
+    import sympy
+
+    f, sigma = sympy.symbols("frequency conductivity", positive=True)
+    rule = sympy.sqrt(2 * sympy.pi * f * sympy.Float(MU_0) / (2 * sigma))
+    return {
+        "resistance": Rule(
+            rule,
+            implementation=lambda frequency, conductivity: (
+                ImpedanceConductor3D((), conductivity).surface_impedance(frequency).real
+            ),
+            ranges={"frequency": (0.5e6, 4.0e6), "conductivity": (1.0e6, 6.0e7)},
+            rtol=1e-12,
+        )
+    }
+
+
+@method(
+    equations={
+        "leontovich": r"\mathbf E_t = Z_s\,\mathbf H\times\mathbf n, \qquad Z_s = (1 + i)\sqrt{\frac{\omega\mu_0}{2\sigma}} = \frac{1 + i}{\sigma\delta}",
+        "resistance": r"\mathrm{Re}\,Z_s = \sqrt{\frac{\omega\mu_0}{2\sigma}}",
+        "loss": r"P = \tfrac12\mathrm{Re}(Z_s)\,|H_t|^2 \text{ per area}",
+    },
+    assumptions=(
+        r"a good conductor whose skin depth is small against its thickness and radii of curvature; $\mathbf n$ into the metal",
+    ),
+    symbolic=_impedance_rules,
+)
 @dataclass(frozen=True)
 class ImpedanceConductor3D:
     """A good conductor as a surface-impedance (Leontovich) boundary on cut cells.
@@ -138,7 +168,7 @@ class ImpedanceConductor3D:
     Attributes:
         shapes: The shapes it is made of (their union; Booleans for slits).
         conductivity: ``sigma`` [S/m].
-        name: A label for :attr:`InductiveSolution3D.conductor_losses`.
+        name: A label for `InductiveSolution3D.conductor_losses`.
     """
 
     shapes: Sequence[Any]
@@ -157,9 +187,17 @@ def _curl(grid: EdgeGrid) -> sp.csr_matrix:
     return grid._curl_matrix  # type: ignore[attr-defined]
 
 
+@method(
+    equations={
+        "power": r"S = \tfrac12 i\omega\, a\cdot\bar j, \qquad Z = \frac{2S}{|I|^2} = R + i\omega L",
+        "losses": r"P_\sigma = \tfrac12\omega^2 a^H M_\sigma a, \qquad P_Z = \tfrac12\sum_f\mathrm{Re}(Z_s)|H_f|^2 w_f L^*_f",
+        "field": r"B_f = \mu_0 H_f \quad \left(\frac{b_f}{A_f} \text{ without impedance conductors}\right)",
+    },
+    assumptions=(r"the losses sum to $\mathrm{Re}\,S$ to round-off",),
+)
 @dataclass(frozen=True)
 class InductiveSolution3D:
-    """The time-harmonic field of :meth:`InductiveField3D.solve`, as complex amplitudes.
+    """The time-harmonic field of `InductiveField3D.solve`, as complex amplitudes.
 
     Attributes:
         grid: The edge grid.
@@ -173,7 +211,7 @@ class InductiveSolution3D:
             (the grid's face areas without them).
         face_field_factor: ``H_f = factor * b_f`` on every face [A/(m Wb)]: ``1 /
             (mu0 A_f)``, or with impedance conductors ``1 / D_f`` (see
-            :class:`InductiveField3D`).
+            `InductiveField3D`).
         surface_losses: The power dissipated in each impedance conductor [W].
     """
 
@@ -261,6 +299,28 @@ class InductiveSolution3D:
         return float(np.imag(self.impedance)) / self.omega
 
 
+@method(
+    equations={
+        "field": r"\nabla\times(\nu\nabla\times\mathbf A) + i\omega\sigma\mathbf A = \mathbf J_\mathrm{coil}, \qquad \nu = \frac{1}{\mu_0}, \qquad \mathbf E = -i\omega\mathbf A",
+        "system": r"\left(C^T M_\nu C + i\omega M_\sigma + M_g\right) a = j, \qquad a_e = \int_e\mathbf A\cdot d\mathbf l",
+        "hodge": r"M_\nu = \mathrm{diag}\frac{L^*_f}{D_f}, \qquad M_\sigma = \mathrm{diag}\frac{\sigma_e A^*_e}{L_e}, \qquad M_g = \frac{\epsilon}{\mu_0 l^2}\mathrm{diag}\frac{A^*_e}{L_e}",
+        "coil": r"\mathbf J = \nabla\times\mathbf T, \quad \mathbf T = n I\hat{\mathbf e} \text{ inside the coil}, \qquad j = C^T(T L^*) \ \Rightarrow\ G^T j = 0",
+        "cut_face": r"D_f = \mu_0 A^\mathrm{air}_f - \frac{i Z_s w_f}{\omega}, \qquad H_f = \frac{b_f}{D_f}",
+    },
+    assumptions=(
+        r"finite integration on a uniform Yee grid, temporal gauge, no displacement current",
+        r"$\epsilon$ = `regularization` ($10^{-6}$): a weak Coulomb gauge in the insulator, real (no loss), shifting the inductance by $O(\epsilon)$; $l$ the box's largest side",
+        r"$A^\mathrm{air}_f$ floored at `min_air_fraction` $\cdot A_f$ in the reluctance only; faces with $D_f = 0$ get zero",
+        r"volume conductors on the edges by the midpoint or `samples`$^3$ sub-points (harmonic along, arithmetic across the edge)",
+        r"direct: SuperLU in a nested-dissection order without pivoting; iterative: COCG with the auxiliary-space preconditioner",
+    ),
+    references=(
+        "[Yee, IEEE Trans. Antennas Propag. 14, 302 (1966)](https://doi.org/10.1109/TAP.1966.1138693)",
+        "Weiland, AEÜ 31, 116 (1977) (finite integration)",
+        "Dey and Mittra (conformal cut faces)",
+    ),
+    components=(ImpedanceConductor3D, InductiveSolution3D),
+)
 class InductiveField3D:
     """The 3D time-harmonic magnetoquasistatic field of coils and conductors.
 
@@ -274,18 +334,18 @@ class InductiveField3D:
             conductors.
         samples: ``1``: a conductor's edges are those whose midpoint it contains (a
             staircased region). ``s > 1``: the sub-cell conductance of every edge's dual
-            cell from ``s^3`` points (:meth:`EdgeGrid.edge_average`).
+            cell from ``s^3`` points (`EdgeGrid.edge_average`).
         regularization: ``eps`` of the gauge term (relative to ``nu / l^2``).
         impedance_conductors: Good conductors as surface-impedance boundaries
-            (:class:`ImpedanceConductor3D`), on cut cells.
+            (`ImpedanceConductor3D`), on cut cells.
         cut_cells: ``True``: the impedance conductors' cut cells are conformal
-            (:func:`~wellbalanced.spatial.cutcell.cut_cells`, simgeometry shapes);
-            ``False``: staircased (:func:`~wellbalanced.spatial.cutcell.staircased_cells`).
+            (`wellbalanced.spatial.cutcell.cut_cells`, simgeometry shapes);
+            ``False``: staircased (`wellbalanced.spatial.cutcell.staircased_cells`).
         min_air_fraction: The smallest air fraction of a cut face's area in its
             reluctance (the "small cell" bound; the flux and the losses keep the face's
             true area otherwise).
         min_sine: The bound of ``sin(theta)`` in the cut faces' surface widths
-            (:func:`~wellbalanced.spatial.cutcell.cut_cells`).
+            (`wellbalanced.spatial.cutcell.cut_cells`).
     """
 
     # --- sources and materials -----------------------------------------------------
@@ -432,6 +492,16 @@ class InductiveField3D:
 
     # --- the operator ----------------------------------------------------------------
 
+    @method(
+        equations={
+            "stokes": r"\mu_0 A^\mathrm{air}_f H_f = b_f + \frac{i Z_s w_f}{\omega} H_f, \qquad \mathbf A_t = \frac{i}{\omega} Z_s\,\mathbf H\times\mathbf n \text{ along the metal}",
+            "factor": r"H_f = \frac{b_f}{D_f}, \qquad D_f = \mu_0 A^\mathrm{air}_f - \frac{i Z_s w_f}{\omega} \quad (\mu_0 A_f \text{ without impedance conductors})",
+        },
+        assumptions=(
+            r"$\mathbf H$ tangent to the metal: $(\mathbf H\times\mathbf n)\cdot d\mathbf l = H_f\, dl/\sin\theta$, which integrates to $H_f w_f$",
+        ),
+        references=("Dey and Mittra (conformal cut faces with a surface impedance)",),
+    )
     def face_field_factor(self, frequency: float | None = None) -> np.ndarray:
         """``H_f = factor * b_f`` on every face [A/(m Wb)].
 
@@ -440,7 +510,7 @@ class InductiveField3D:
         contour, where ``A_t = (i / omega) Z_s H x n`` (Dey and Mittra's cut faces with
         a surface impedance): ``mu0 A_f^air H_f = b_f + (i Z_s w_f / omega) H_f``, so
         ``factor = 1 / D_f``, ``D_f = mu0 A_f^air - i Z_s w_f / omega`` (``w_f`` the
-        surface's width in the face, :mod:`~wellbalanced.spatial.cutcell`). Without
+        surface's width in the face, `wellbalanced.spatial.cutcell`). Without
         impedance conductors ``D_f = mu0 A_f``. Faces entirely inside get zero.
         """
         grid = self.grid
@@ -557,7 +627,7 @@ class InductiveField3D:
             frequency: The frequency [Hz] (default: the model's).
             solver: ``"direct"`` (a sparse LU, kept per frequency) or ``"iterative"``
                 (COCG with the auxiliary-space preconditioner of
-                :mod:`~wellbalanced.spatial.iterative`, kept per frequency), for grids
+                `wellbalanced.spatial.iterative`, kept per frequency), for grids
                 beyond about 10^5 unknowns.
             tolerance: The iterative solver's relative residual.
             max_iterations: The iterative solver's limit; it raises if not converged.
@@ -579,7 +649,7 @@ class InductiveField3D:
                 tolerance=tolerance,
                 max_iterations=max_iterations,
             )
-            #: The last iterative solve's :class:`IterativeResult`.
+            #: The last iterative solve's `IterativeResult`.
             self.last_iterative = result
             if not result.converged:
                 raise RuntimeError(

@@ -7,6 +7,23 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Method cards (methodcard) on the equations of the models: the reactions, the global model
+  (cusps, wall areas, gas temperature, the steady state), the OpenCR rates, the neutralizer
+  (beam, Knudsen profile, pumping, fractions, sources, fixed point), the 0D RF driver
+  (conductivity, Nagaoka, transformer and solenoid impedances, edge-to-centre ratios), the
+  magnetron (argon fits, Lotz), `Fluid1D` (Scharfetter-Gummel, boundaries, Newton),
+  `Fluid2D`, the cell grid's curl-curl, the 2D and 3D inductive fields (time stepper, edge
+  grid, cut cells, COCG and its preconditioner), the field-plasma coupling, the neutral gas,
+  the drift fluid (SSP-RK3, linear modes, dispersion relations), the local dispersion
+  relation, the gas dynamics and the transport budget, with their assumptions and references.
+  `test_method_cards.py` checks them: SymPy rules for 26 closed forms, the observed order of
+  seven discretisations, and the cards of the docs against those of the code. Adds the
+  `methodcard` dependency.
+- A Numerics section in the docs (header and sidebar): an overview of the models' equations
+  (`docs/src/content/docs/numerics/index.mdx`, with the main cards) and one page per module
+  in the order of the models (starlight-theme's `methodcard: { pages: true }`), and a
+  Numerics section on each method's API page.
+
 - `wellbalanced.dispersion`: `LocalRoots.drift` keeps the roots of the drift ordering
   (`|Re omega| < 0.3 k_y v_E`, `|Im omega| < 0.02 omega_ce`), which separates the gradient-drift
   and lower-hybrid branches from the electron-scale roots (`Re omega ~ 0.3 omega_ce`,
@@ -244,6 +261,11 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   infinite solenoid reproduces `RFDriver(coupling="solenoid")` to 0.2 %.
 - Example `rf_driver_rz.py`: the BUG driver in r–z with cold and viscous electrons and the
   global model's plasma at 60 kW from the generator.
+
+### Fixed
+
+- The docstrings' `:func:`, `:class:` and `:meth:` roles are code spans, which the API pages
+  render.
 
 ### Changed
 

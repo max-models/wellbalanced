@@ -6,11 +6,11 @@ the ionization and recombination of atomic hydrogen through its excited
 levels (``hydrogen/atomic/basic``), and the ionization and dissociation of H2
 through its vibrational levels (``hydrogen/molecular/basic``), each with the
 electron energy loss per event that the radiation of the excited states adds.
-:func:`opencr_hydrogen_reactions` turns them into :class:`~wellbalanced.reactions.Reaction`
+`opencr_hydrogen_reactions` turns them into `wellbalanced.reactions.Reaction`
 objects in place of ground-state cross sections and placeholders.
 
 The effective rates depend on the electron density as well as the
-temperature, a :class:`~wellbalanced.reactions.Reaction` on the temperature
+temperature, a `wellbalanced.reactions.Reaction` on the temperature
 only: they are taken at ``electron_density``, which should be near the
 density of the solution (the dependence is weak below about 1e18 m^-3, where
 the excited states are coronal).
@@ -28,6 +28,7 @@ from collections.abc import Callable
 from typing import Any
 
 import numpy as np
+from methodcard import method
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS
 from plasmacoll.hydrogen_elastic import ELASTIC_FITS
 
@@ -99,6 +100,18 @@ def _isotope(name: str, isotope: str) -> str:
     return name if name == "e" else name.replace("H", isotope)
 
 
+@method(
+    equations={
+        "interpolation": r"\ln K(T) = \mathrm{interp}\big(\ln T;\ \ln T_k, \ln K_k\big), \qquad T_k = 0.3 \ldots 100 \text{ eV (40 points)}",
+        "energy_pair": r"K_\pm = \frac{\max(\pm L, 0)}{1\ \mathrm{eV}}, \quad \varepsilon_\pm = \pm 1\ \mathrm{eV} \ \Rightarrow\ \sum R\,\varepsilon_e = L\, n_e n_X",
+        "dissociation": r"K_\mathrm{diss} = \tfrac12\left(K_{\mathrm H_2 \to \mathrm H} - K_{\mathrm H_2 \to \mathrm H^+}\right)",
+    },
+    assumptions=(
+        r"OpenCR's effective rates at one `electron_density` ($10^{17}$ m$^{-3}$; weak dependence below about $10^{18}$, where the states are coronal); end values outside the table",
+        r"elastic e–H, e–H$_2$ from `plasmacoll.hydrogen_elastic` (Park et al. 2022); deuterium by renaming, elastic masses doubled",
+    ),
+    references=("[OpenCR](https://github.com/max-models/opencr)",),
+)
 def opencr_hydrogen_reactions(
     electron_density: float = 1.0e17,
     n_max: int = 12,
@@ -226,12 +239,12 @@ def opencr_hydrogen_reactions(
 
 
 def hydrogen_driver(electron_density: float = 1.0e17, **overrides: Any):
-    """The BUG driver of :func:`~wellbalanced.driver.illustrative_hydrogen_driver` with OpenCR's rates.
+    """The BUG driver of `wellbalanced.driver.illustrative_hydrogen_driver` with OpenCR's rates.
 
     The geometry, gas and options of the illustrative driver, with the
-    reactions of :func:`opencr_hydrogen_reactions` at ``electron_density``
+    reactions of `opencr_hydrogen_reactions` at ``electron_density``
     in place of its placeholder cross sections. ``overrides`` replace fields
-    of the :class:`~wellbalanced.driver.RFDriver`.
+    of the `wellbalanced.driver.RFDriver`.
     """
     from wellbalanced.driver import illustrative_hydrogen_driver
 
@@ -242,10 +255,10 @@ def hydrogen_driver(electron_density: float = 1.0e17, **overrides: Any):
 
 
 def deuterium_neutralizer(electron_density: float = 1.0e17, **overrides: Any):
-    """The neutralizer channel of :func:`~wellbalanced.neutralizer.illustrative_deuterium_neutralizer` with OpenCR's plasma rates.
+    """The neutralizer channel of `wellbalanced.neutralizer.illustrative_deuterium_neutralizer` with OpenCR's plasma rates.
 
     The electron collisions with D2, D and their ions are those of
-    :func:`opencr_hydrogen_reactions` (``isotope="D"``) at ``electron_density``,
+    `opencr_hydrogen_reactions` (``isotope="D"``) at ``electron_density``,
     without D3+ (not a species of the channel). The beam's charge-changing
     cross sections are still the illustrative ones, so the function warns as
     the illustrative channel does.

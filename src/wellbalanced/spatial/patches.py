@@ -1,19 +1,19 @@
 """The leaf cells of a patchwork hierarchy as the grid of the spatial models.
 
-:class:`PatchGrid` has the interface of :class:`~wellbalanced.spatial.grid.CellGrid`, so
+`PatchGrid` has the interface of `wellbalanced.spatial.grid.CellGrid`, so
 every spatial model runs on either: fields are arrays over the leaf cells, shape
 ``(n,)``, instead of ``(nx, ny)``. The geometry and the operator are patchwork's
-(:class:`patchwork.CellOperator`): the curl-curl of the field normal to the plane, a
+(`patchwork.CellOperator`): the curl-curl of the field normal to the plane, a
 scalar in a cut and the azimuthal component in r–z, assembled from the same energy as
-:class:`CellGrid`'s, its coarse–fine faces the symmetric variant (the power balance holds
+`CellGrid`'s, its coarse–fine faces the symmetric variant (the power balance holds
 to round-off), and the curl of a field from the operator's own faces
-(:meth:`patchwork.CellOperator.curl`). A coarse base level reaches the far boundary and
+(`patchwork.CellOperator.curl`). A coarse base level reaches the far boundary and
 finer patches cover the source, so where the stretched tensor grid refines whole rows
 and columns, the patches refine only the places that need it.
 
-Layouts: :meth:`PatchGrid.refined` from boxes per level (or a function of the cell
-centres), :meth:`PatchGrid.from_edges` as fine as a tensor grid everywhere (for
-comparisons), :meth:`PatchGrid.refined_where` one level finer where a field is large
+Layouts: `PatchGrid.refined` from boxes per level (or a function of the cell
+centres), `PatchGrid.from_edges` as fine as a tensor grid everywhere (for
+comparisons), `PatchGrid.refined_where` one level finer where a field is large
 (the skin layer of a solution, say). patchwork is an optional dependency
 (``pip install "wellbalanced[spatial]"``), imported when a grid is made.
 """
@@ -81,9 +81,9 @@ class PatchGrid:
     """The leaf cells of a patch hierarchy, in a cut or in r–z.
 
     Args:
-        hierarchy: A :class:`patchwork.AMRHierarchy` (its ``geometry``, ``"cartesian"`` or
+        hierarchy: A `patchwork.AMRHierarchy` (its ``geometry``, ``"cartesian"`` or
             ``"cylindrical"``, is the grid's).
-        boundaries: The boundary of each axis, as for :class:`CellGrid`: ``"dirichlet"``,
+        boundaries: The boundary of each axis, as for `CellGrid`: ``"dirichlet"``,
             ``"neumann"`` or ``"periodic"`` (which the hierarchy's ``periodic`` must
             match); in r–z the axis, when the radius starts at 0.
     """
@@ -345,7 +345,7 @@ class PatchGrid:
         return int(self.hierarchy.max_level) + 1
 
     def cell_field(self, value: CellField, dtype: Any = float) -> np.ndarray:
-        """A :data:`CellField` evaluated on the cell centres, shape ``(n,)``."""
+        """A `CellField` evaluated on the cell centres, shape ``(n,)``."""
         if callable(value):
             result = np.asarray(value(self.xx, self.yy), dtype=dtype)
         else:
@@ -373,7 +373,7 @@ class PatchGrid:
     ) -> sp.csr_matrix:
         """The curl-curl of the normal field, integrated over the cells (symmetric).
 
-        As :meth:`CellGrid.curl_curl`: ``face_coefficient`` scales each face by the mean
+        As `CellGrid.curl_curl`: ``face_coefficient`` scales each face by the mean
         of its two cells; with ``active`` the other cells are a body held at 0 with its
         surface on their faces, and their rows and columns are zero.
         """
@@ -446,7 +446,7 @@ class PatchGrid:
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """The coarser cell of faces between levels, its neighbours and the offset.
 
-        As :class:`TransportFaces` has them: ``coarse_side``, ``coarse_neighbours``
+        As `TransportFaces` has them: ``coarse_side``, ``coarse_neighbours``
         (the leaf cells of the coarser one's size next to it along the face, on the
         finest lattice; periodic axes wrap) and ``coarse_offset``.
         """
@@ -486,12 +486,12 @@ class PatchGrid:
         """The faces of the leaf cells for finite-volume transport, across levels too.
 
         Between two leaf cells of different levels each face is as long as the finer
-        cell's side (patchwork's :meth:`~patchwork.CompositeCells.faces`): one flux
+        cell's side (patchwork's `patchwork.CompositeCells.faces`): one flux
         per face, which the coarse cell sums over its faces on that side, is what
-        patchwork's refluxing (:class:`~patchwork.FluxRegister`) restores after an
+        patchwork's refluxing (`patchwork.FluxRegister`) restores after an
         explicit step; a scheme that takes these faces has it from the start. Their
         ``coarse_side``, ``coarse_neighbours`` and ``coarse_offset`` (see
-        :class:`TransportFaces`) locate the coarse value along the face.
+        `TransportFaces`) locate the coarse value along the face.
         """
         cells = self.cells
         centres = np.stack([self.x, self.y], axis=1)

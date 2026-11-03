@@ -10,7 +10,7 @@ Poisson's equation for the potential ``phi``:
 
 with the energy flux of Hagelaar and Pitchford (2005): the electron flux with
 ``5/3`` times the mobility and diffusion, applied to ``w``. The sources come
-from the same :class:`~wellbalanced.reactions.Reaction` objects as the global
+from the same `wellbalanced.reactions.Reaction` objects as the global
 model, with rates at the local electron temperature.
 
 An ion species with ``momentum=True`` obeys its momentum equation instead of
@@ -34,7 +34,7 @@ the Scharfetter-Gummel flux times ``e / (M mu)``: without inertia the scheme
 is the drift-diffusion scheme exactly; ``Gamma^2 / n`` is taken on the cells. Every equation is implicit (backward Euler, Poisson
 included, so the step is not limited by the dielectric relaxation time),
 solved by Newton's method in the logarithms of the densities and of ``w``.
-:meth:`Fluid1D.steady_state` steps in pseudo-time with a growing step, then
+`Fluid1D.steady_state` steps in pseudo-time with a growing step, then
 solves the steady equations themselves.
 
 Boundaries, per species and end (``"left"``, ``"right"``), may be changed between
@@ -61,6 +61,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import xarray as xr
+from methodcard import ConvergenceProblem, Rule, method
 from plasmacoll.constants import ELEMENTARY_CHARGE
 from scope_profiler import profile
 
@@ -106,6 +107,89 @@ def _bernoulli(x: np.ndarray) -> np.ndarray:
     return np.where(small, series, value)
 
 
+def _scharfetter_gummel_rules() -> dict:
+    """The SymPy rule of `scharfetter_gummel` (for the tests)."""
+    import sympy
+
+    z, mu, d, field, left, right, h = sympy.symbols(
+        "z mu d efield left right distance", real=True
+    )
+    peclet = z * mu * field * h / d
+
+    def bernoulli(x):
+        return x / (sympy.exp(x) - 1)
+
+    rule = d / h * (bernoulli(-peclet) * left - bernoulli(peclet) * right)
+    ranges = {
+        "z": (0.5, 1.0),
+        "mu": (0.1, 10.0),
+        "d": (0.1, 10.0),
+        "efield": (-50.0, -5.0),
+        "left": (0.5, 2.0),
+        "right": (0.5, 2.0),
+        "distance": (0.01, 0.1),
+    }
+    return {
+        "flux": Rule(
+            rule,
+            implementation=lambda z, mu, d, efield, left, right, distance: float(
+                scharfetter_gummel(
+                    z,
+                    np.array(mu),
+                    np.array(d),
+                    np.array(efield),
+                    np.array(left),
+                    np.array(right),
+                    distance,
+                )
+            ),
+            ranges=ranges,
+        )
+    }
+
+
+def _scharfetter_gummel_problem() -> ConvergenceProblem:
+    """The face flux of a smooth density in a smooth field, against the exact flux."""
+    mu, d = 2.0, 1.0
+
+    def density(x):
+        return 1.0 + 0.5 * np.sin(2.0 * np.pi * x)
+
+    def field(x):
+        return 1.0 + 0.5 * np.cos(2.0 * np.pi * x)
+
+    def error(h: float) -> float:
+        x = np.arange(0.0, 1.0, h)
+        face = x + 0.5 * h
+        ones = np.ones(x.size)
+        flux = scharfetter_gummel(
+            1, mu * ones, d * ones, field(face), density(x), density(x + h), h
+        )
+        gradient = np.pi * np.cos(2.0 * np.pi * face)
+        exact = mu * density(face) * field(face) - d * gradient
+        return float(np.max(np.abs(flux - exact)))
+
+    return ConvergenceProblem(error, steps=[1 / 16, 1 / 32, 1 / 64])
+
+
+@method(
+    equations={
+        "flux": r"\Gamma_{i+1/2} = \frac{D}{h}\Big(B(-\mathrm{Pe})\, n_i - B(\mathrm{Pe})\, n_{i+1}\Big), \qquad \mathrm{Pe} = \frac{z \mu E h}{D}, \qquad B(x) = \frac{x}{e^x - 1}",
+        "series": r"B(x) = 1 - \frac{x}{2} + \frac{x^2}{12} - \frac{x^4}{720} \quad (|x| < 10^{-3})",
+        "drift_only": r"\Gamma = z\mu E\, n_\mathrm{upwind} \quad (D = 0)",
+    },
+    order=2,
+    assumptions=(
+        r"exact for a constant flux and field between the two points, so a steady state has no artificial diffusion",
+        r"the series below $|x| = 10^{-3}$ is exact to round-off; a shorter one errs by $x^2/12$, noise in a finite-difference Jacobian",
+        r"the order is that of the face flux of a smooth profile in a varying field",
+    ),
+    references=(
+        "[Scharfetter and Gummel, IEEE Trans. Electron Devices 16, 64 (1969)](https://ieeexplore.ieee.org/document/1475609)",
+    ),
+    symbolic=_scharfetter_gummel_rules,
+    problem=_scharfetter_gummel_problem,
+)
 def scharfetter_gummel(
     z: int,
     mu: np.ndarray,
@@ -176,12 +260,30 @@ class FluidSpecies:
         return self.species.name
 
 
+@method(
+    equations={
+        "wall": r"\Gamma_\mathrm{out} = \frac{1 - r}{1 + r}\Big(\max(z\mu E_\mathrm{out}, 0) + s\,\bar v\Big)\, n, \qquad \bar v = \sqrt{\frac{8 e T}{\pi m}}",
+        "wall_energy": r"\Gamma_{w,\mathrm{out}} = \frac{1 - r}{1 + r}\Big(\tfrac53\max(z\mu E_\mathrm{out}, 0) + \tfrac43 s\,\bar v\Big)\, w \quad (2 T_e \text{ per thermal electron})",
+        "density": r"\Gamma = \text{SG flux between } n_b \text{ and } n_\mathrm{cell} \text{ over } h/2, \qquad w_b = \tfrac32 n_b T_b",
+        "flux": r"\Gamma_\mathrm{in} = \text{value}, \qquad \Gamma_{w,\mathrm{in}} = 2T\, \Gamma_\mathrm{in}",
+        "outflow": r"\Gamma_\mathrm{out} = v\, n_\mathrm{cell}, \qquad \Gamma_{w,\mathrm{out}} = f\, T_e\, v\, n_\mathrm{cell}",
+        "momentum_wall": r"\Gamma_\mathrm{out} = \frac{2c}{b + \sqrt{b^2 + 4ac}} + s\,\bar v\, n, \qquad a = \frac{2}{h n}, \quad b = \frac{e}{M\mu}, \quad c = \frac{2\Pi}{h} + \frac{z e E_\mathrm{out} n}{M}",
+    },
+    assumptions=(
+        r"$n$, $T$ those of the cell next to the end ($T_e$ for electrons, $T_g$ for the rest); a species without a condition has a wall",
+        r"$s = 1/2$: the density of the outgoing half-Maxwellian (Hagelaar et al. 2000); $s = 1/4$: a full Maxwellian; the two floating sheaths differ by $T_e \ln 2$",
+        r"the momentum wall: the half cell's steady momentum balance, nothing coming back (supersonic), $\Pi$ the momentum flux arriving; zero if $c \le 0$",
+    ),
+    references=(
+        "[Hagelaar, de Hoog and Kroesen, Phys. Rev. E 62, 1452 (2000)](https://doi.org/10.1103/PhysRevE.62.1452)",
+    ),
+)
 @dataclass
 class Boundary:
     """The condition of one species at one end.
 
-    Use the constructors: :meth:`wall`, :meth:`density`, :meth:`flux`,
-    :meth:`outflow`, :meth:`symmetry`. ``value`` is the density (m^-3), the flux into
+    Use the constructors: `wall`, `density`, `flux`,
+    `outflow`, `symmetry`. ``value`` is the density (m^-3), the flux into
     the domain (m^-2 s^-1) or the outflow speed (m/s); ``temperature`` (eV) the electron temperature of a
     prescribed electron density; ``reflection`` the wall's reflection
     coefficient; ``thermal_share`` the share of ``v_th n`` a wall takes;
@@ -354,6 +456,63 @@ class FluidState:
         return xr.Dataset(data, coords=coords, attrs={"time": self.time})
 
 
+def _fluid_problem() -> ConvergenceProblem:
+    """Steady diffusion of a neutral with a sine source between held densities.
+
+    ``-D n'' = D k^2 A sin(k x)`` on ``[0, L]`` with ``n = n_b`` at both ends has
+    the solution ``n_b + A sin(k x)``; the electrons are a trace population.
+    """
+    from wellbalanced.species import ELECTRON
+
+    gas = Species.atomic("A", 40.0)
+    length, diffusion, held, amplitude = 1.0, 1.0, 1.0e16, 0.5e16
+    k = np.pi / length
+
+    def error(h: float) -> float:
+        cells = round(length / h)
+        x = (np.arange(cells) + 0.5) * h
+        held_ends = {"A": Boundary.density(held), "e": Boundary.density(1.0e6)}
+        model = Fluid1D(
+            [FluidSpecies(ELECTRON, 1.0), FluidSpecies(gas, diffusion=diffusion)],
+            [],
+            length,
+            cells,
+            electron_temperature=1.0,
+            boundaries={"left": held_ends, "right": dict(held_ends)},
+            sources={"A": diffusion * k * k * amplitude * np.sin(k * x)},
+        )
+        exact = held + amplitude * np.sin(k * x)
+        start = model.pack({"A": exact, "e": 1.0e6}, 1.0, 0.0)
+        state = model.steady_state(start, dt=1.0)
+        return float(np.max(np.abs(state.densities["A"] - exact)) / amplitude)
+
+    return ConvergenceProblem(error, steps=[1 / 16, 1 / 32, 1 / 64])
+
+
+@method(
+    equations={
+        "continuity": r"\partial_t n_s + \partial_x \Gamma_s = S_s, \qquad \Gamma_s = z_s \mu_s n_s E - D_s \partial_x n_s",
+        "energy": r"\partial_t w + \partial_x \Gamma_w = -\Gamma_e E - P_\mathrm{loss} + \frac{P_\mathrm{ext}}{e}, \qquad w = \tfrac32 n_e T_e, \qquad \Gamma_w = \Gamma[\tfrac53\mu_e, \tfrac53 D_e](w)",
+        "poisson": r"\partial_x^2 \phi = -\frac{e}{\varepsilon_0}\sum_s z_s n_s, \qquad E = -\partial_x\phi",
+        "momentum": r"\partial_t \Gamma + \partial_x \frac{\Gamma^2}{n} = \frac{z e}{M} n E - \frac{e T_g}{M} \partial_x n - \left(\nu + \frac{L}{n}\right)\Gamma, \qquad \nu = \frac{e}{M\mu}",
+        "losses": r"P_\mathrm{loss} = \sum R\,\varepsilon_e - \sum S\,\varepsilon_\mathrm{src}",
+        "grid": r"x_i = (i + \tfrac12) h, \qquad E_{i+1/2} = -\frac{\phi_{i+1} - \phi_i}{h}, \qquad \frac{E_{i-1/2} - E_{i+1/2}}{h} + \frac{e\rho_i}{\varepsilon_0} = 0",
+        "staggered": r"\Gamma_{i+1/2} = u_{i+1/2}\, \frac{n_i + n_{i+1}}{2}, \qquad \frac{\Pi_{i+1} - \Pi_i}{h} - \nu \Gamma^\mathrm{SG}_{i+1/2} + \left(\nu + \overline{L/n}\right)\Gamma_{i+1/2} = 0",
+    },
+    order=2,
+    assumptions=(
+        r"$D = \mu T$ unless given ($T_e$ for electrons, $T_g$ otherwise); constant transport coefficients; no gas or ion energy equation",
+        r"Scharfetter-Gummel fluxes on uniform cells; $D_e$ on a face with the mean $T_e$ of its cells; the Joule term the mean of $-\Gamma E$ on the two faces",
+        r"a momentum ion: its face velocity an unknown, $\Pi = \Gamma^2/\bar n$ upwinded on the cells, its force $e/(M\mu)$ times the SG flux with $D = \mu T_g$; without inertia the SG flux exactly",
+        r"$L$ the rate of the reactions destroying it (ions born at rest); Poisson's equation needs the Debye length resolved",
+        r"the order is that of a steady diffusion problem with held densities (the problem of the tests)",
+    ),
+    references=(
+        "[Hagelaar and Pitchford, Plasma Sources Sci. Technol. 14, 722 (2005)](https://doi.org/10.1088/0963-0252/14/4/011)",
+    ),
+    components=(scharfetter_gummel, Boundary, Reaction),
+    problem=_fluid_problem,
+)
 @dataclass
 class Fluid1D:
     """A plasma between ``x = 0`` and ``length`` on ``cells`` cells; see the module docstring.
@@ -376,7 +535,7 @@ class Fluid1D:
         sources: External volume sources ``{species: rate}`` (m^-3 s^-1), numbers
             or arrays on the cells.
         volume_sources: External sources as for the global model, e.g. a beam's
-            (:meth:`wellbalanced.neutralizer.Neutralizer.beam_sources`): rates per
+            (`wellbalanced.neutralizer.Neutralizer.beam_sources`): rates per
             unit density of fluid or fixed species, numbers or arrays on the
             cells, with the energy they give the electrons.
     """
@@ -490,7 +649,7 @@ class Fluid1D:
         """The unknowns of fields on the cells (densities by name, ``T_e``, ``phi``).
 
         ``fluxes`` start the species with momentum: on the ``cells + 1`` faces
-        (as :attr:`FluidState.fluxes`), on the ``cells - 1`` faces between
+        (as `FluidState.fluxes`), on the ``cells - 1`` faces between
         cells, or a number; zero if missing.
         """
         u = np.zeros((self.cells, self._nvar))
@@ -1003,6 +1162,19 @@ class Fluid1D:
         return u
 
     @profile("wellbalanced.Fluid1D.steady_state", tags=_PROFILE_TAGS)
+    @method(
+        equations={
+            "backward_euler": r"\frac{u^{n+1} - u^n}{\Delta t} = F(u^{n+1}) \quad (\text{Poisson included}), \qquad \text{then } F(u) = 0",
+            "newton": r"J\,\delta = -r, \qquad u = (\ln n_s,\ \ln w,\ u_{i+1/2},\ \phi), \qquad J_{:,j} \approx \frac{r(u + \epsilon_j e_j) - r(u - \epsilon_j e_j)}{2\epsilon_j}, \quad \epsilon_j = 10^{-6}\max(1, |u_j|)",
+            "damping": r"\delta \leftarrow \delta\, \min\left(1, \frac{2}{\max |\delta_{\ln}|}\right), \qquad \text{converged: } |\delta_{\ln}| < 10^{-10},\ |\delta_\mathrm{lin}| < 10^{-10}(1 + \max|u|)",
+            "pseudo_time": r"\Delta t \leftarrow \text{growth}\cdot\Delta t \text{ after a step}, \qquad \Delta t \leftarrow \Delta t / 4 \text{ after a failure}",
+        },
+        assumptions=(
+            r"the Jacobian on a 3-colouring of the cells (a residual depends on its neighbours only), `spsolve`; at most 30 iterations",
+            r"stops growing once a step of at least `max_dt` succeeds (at most `max_steps`), or fails below $10^{-6}$ of the first step",
+            r"with a momentum species the upwinded $\Pi$ reaches two cells, which the colouring misses: only the convergence rate can suffer",
+        ),
+    )
     def steady_state(
         self,
         unknowns: np.ndarray,
@@ -1040,7 +1212,7 @@ class Fluid1D:
     def state(
         self, unknowns: np.ndarray, time: float = 0.0, converged: bool = True
     ) -> FluidState:
-        """The :class:`FluidState` of a vector of unknowns."""
+        """The `FluidState` of a vector of unknowns."""
         densities, te, phi, inner = self._unpack(unknowns)
         fluxes, _ = self._fluxes(densities, te, phi, inner)
         rates, _, _, _ = self._reactions(densities, te)

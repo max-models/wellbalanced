@@ -1,6 +1,6 @@
 """The uniform Cartesian edge (Yee) grid of the 3D field.
 
-:class:`EdgeGrid` is the staggered grid of the finite integration technique (Weiland
+`EdgeGrid` is the staggered grid of the finite integration technique (Weiland
 1977; Yee 1966): a vector potential as line integrals ``a_e = int_e A . dl`` on the edges
 of the cells, the magnetic flux ``b_f = int_f B . dA = (C a)_f`` through their faces, with
 ``C`` the face–edge incidence matrix, the discrete curl (entries ``0, +-1``); the
@@ -20,7 +20,7 @@ Boundaries, per side of every axis:
 - ``"periodic"`` (both sides of an axis).
 
 Edges and faces are numbered axis by axis: the edges along ``x`` first, each block a
-C-ordered array of shape :meth:`edge_shape`. Shapes are anything with
+C-ordered array of shape `edge_shape`. Shapes are anything with
 ``contains_points`` taking ``(3, n)`` points (simgeometry's 3D shapes and their
 Booleans); this module does not import simgeometry.
 """
@@ -32,6 +32,7 @@ from typing import Any, Literal
 
 import numpy as np
 import scipy.sparse as sp
+from methodcard import method
 
 __all__ = ["EdgeGrid", "SideBoundary"]
 
@@ -52,6 +53,21 @@ def _sides(boundary: Any) -> tuple[SideBoundary, SideBoundary]:
 _CYCLE = ((0, 1, 2), (1, 2, 0), (2, 0, 1))
 
 
+@method(
+    equations={
+        "staggering": r"a_e = \int_e\mathbf A\cdot d\mathbf l, \qquad b_f = \int_f\mathbf B\cdot d\mathbf S = (C a)_f, \qquad C G = 0",
+        "hodge": r"\text{edges: } L_e,\ A^*_e \ (\text{dual face}); \qquad \text{faces: } A_f,\ L^*_f \ (\text{dual edge})",
+        "boundaries": r"\text{dirichlet: } \mathbf A\times\mathbf n = 0; \qquad \text{natural: } \mathbf H\times\mathbf n = 0; \qquad \text{periodic}",
+    },
+    assumptions=(
+        r"a uniform Cartesian grid; $C$, $G$ incidence matrices (entries $0, \pm1$); the metric only in the diagonal Hodge matrices",
+        r"dual areas halved once per boundary plane an edge lies in, dual lengths halved on a boundary",
+    ),
+    references=(
+        "[Yee, IEEE Trans. Antennas Propag. 14, 302 (1966)](https://doi.org/10.1109/TAP.1966.1138693)",
+        "Weiland, AEÜ 31, 116 (1977) (finite integration)",
+    ),
+)
 class EdgeGrid:
     """Edges and faces of a uniform Cartesian grid of ``cells[0] x cells[1] x cells[2]``.
 
@@ -375,7 +391,7 @@ class EdgeGrid:
         return np.stack(result)
 
     def edge_block(self, values: np.ndarray, axis: int) -> np.ndarray:
-        """The edges along ``axis`` of an edge field, as an array of :meth:`edge_shape`."""
+        """The edges along ``axis`` of an edge field, as an array of `edge_shape`."""
         return values[self.edge_offsets[axis] : self.edge_offsets[axis + 1]].reshape(
             self.edge_shape(axis)
         )

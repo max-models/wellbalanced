@@ -7,22 +7,22 @@ sources such as a fast beam. Reactions take their rates from plasmacoll's
 cross sections, the same data its Monte Carlo collisions use, so a fluid and a
 kinetic model of the same plasma differ in their physics, not their data.
 
-:class:`Fluid1D` resolves the same plasma along one dimension: drift-diffusion of
+`Fluid1D` resolves the same plasma along one dimension: drift-diffusion of
 every species, the electron energy and Poisson's equation, implicit, with
 boundaries that can be changed between steps.
 
-:class:`GasDynamics` is the neutral gas of a sputtering magnetron, argon and the sputtered
+`GasDynamics` is the neutral gas of a sputtering magnetron, argon and the sputtered
 metal as one compressible gas in one or two dimensions (its boundaries and sources are in
-:mod:`wellbalanced.gasdynamics`).
+`wellbalanced.gasdynamics`).
 
-:class:`RFDriver` is a 0D RF driver: a global model of its plasma and a transformer
+`RFDriver` is a 0D RF driver: a global model of its plasma and a transformer
 model of the coil's coupling, giving the coil current and the RF power transfer efficiency
-(:mod:`wellbalanced.driver`). The spatially resolved models are in
-:mod:`wellbalanced.spatial`: :class:`InductiveField2D`, the inductive RF field of coil
+(`wellbalanced.driver`). The spatially resolved models are in
+`wellbalanced.spatial`: `InductiveField2D`, the inductive RF field of coil
 windings, conductors and a prescribed plasma in a 2D cut or in r–z, with cold or viscous
-electrons, :class:`DriverCoupling`, that field with a power-dependent plasma, and
-:class:`InductiveField3D`, the field in 3D on the edges of a Cartesian grid.
-:class:`Fluid2D`, the driver plasma as a multi-species fluid heated by that field.
+electrons, `DriverCoupling`, that field with a power-dependent plasma, and
+`InductiveField3D`, the field in 3D on the edges of a Cartesian grid.
+`Fluid2D`, the driver plasma as a multi-species fluid heated by that field.
 
 The solves, time steps and runs carry scope-profiler regions tagged ``"wellbalanced"``,
 an opt-in tag: they record nothing unless an application enables it, e.g. with

@@ -1,6 +1,6 @@
 """A 2D multi-species fluid of the RF driver plasma, in r–z or in a cut.
 
-Step R3.3 of the RF-driver plan: the plasma that :class:`InductiveField2D` heats, on the
+Step R3.3 of the RF-driver plan: the plasma that `InductiveField2D` heats, on the
 same cells. Every fluid species ``s`` of charge ``z_s`` obeys its continuity equation,
 the ions their momentum equation, and the electrons drift and diffuse and carry their
 energy:
@@ -22,12 +22,12 @@ inertia is what limits their flow to the walls at low pressure (0.3 Pa: the ion 
 free path is a fraction of the driver), where drift-diffusion ions leave about three
 times too fast. ``ions="drift-diffusion"`` drops the inertia except for the ions whose
 species asks for it (``FluidSpecies(momentum=True)``, as in
-:class:`~wellbalanced.Fluid1D`). Two RF terms come from the field: the heating
+`wellbalanced.Fluid1D`). Two RF terms come from the field: the heating
 ``p_RF = 1/2 Re(J E*)`` and the RF-averaged Lorentz force ``F = -(e/2) Re(u x B*)`` on an
-electron (:attr:`InductiveSolution.lorentz_force`), which pushes the electrons away
+electron (`InductiveSolution.lorentz_force`), which pushes the electrons away
 from the coil (it does no work: a magnetic force does none, and its work on the drift
 comes out of the RF motion, whose power ``p_RF`` already is). The sources come from
-:class:`~wellbalanced.reactions.Reaction` objects, rates from plasmacoll, at the local
+`wellbalanced.reactions.Reaction` objects, rates from plasmacoll, at the local
 ``T_e``; the gas is a fixed background (``fixed``), as in NIBS'22 and step R3.5's first
 form. The electrons' mobility is a constant or ``e / (m_e nu)`` with ``nu`` the rate of
 the ``momentum_transfer`` reactions per electron, the same ``nu`` the field takes.
@@ -41,30 +41,30 @@ Two closures of the potential:
   leave with ``1/4 n_e v_e exp(-(phi - phi_w) / T_e)`` and take ``2 T_e + (phi -
   phi_w)`` each (``phi`` in the wall cell, so the sheath and the last half cell are one
   drop). The walls are one conductor: only the total current to them vanishes. This is
-  the sheath and Bohm closure of the global model (:class:`~wellbalanced.GlobalModel`)
+  the sheath and Bohm closure of the global model (`wellbalanced.GlobalModel`)
   resolved in space. The density at the sheath edge is the wall cell's, a first-order
   error of ``u_B h / (2 D)``, small at low pressure.
-- ``"poisson"``: :class:`~wellbalanced.Fluid1D`'s equations, Poisson's equation for the
+- ``"poisson"``: `wellbalanced.Fluid1D`'s equations, Poisson's equation for the
   potential and its absorbing walls (the drift towards the wall plus half the thermal
   flux), the walls grounded, drift-diffusion ions. On a slab it is
-  :class:`~wellbalanced.Fluid1D` (the tests compare the two); it needs the Debye length
+  `wellbalanced.Fluid1D` (the tests compare the two); it needs the Debye length
   resolved.
 
 The form of the ion momentum equation and the wall conditions of Zielke et al.'s model
 are in Zielke's thesis, not yet read (the plan's R0); the ones here are the textbook
 ones above.
 
-Grid: the plasma's cells of a :class:`~wellbalanced.spatial.CellGrid` (tensor, uniform or
+Grid: the plasma's cells of a `wellbalanced.spatial.CellGrid` (tensor, uniform or
 stretched; r–z or the cut) or the leaf cells of a
-:class:`~wellbalanced.spatial.PatchGrid`, refined or not; their faces from
+`wellbalanced.spatial.PatchGrid`, refined or not; their faces from
 ``grid.transport_faces()``. The plasma is the
-:class:`~wellbalanced.spatial.PlasmaRegion` (or every cell): a face to a cell outside it is
+`wellbalanced.spatial.PlasmaRegion` (or every cell): a face to a cell outside it is
 a wall; so is the domain's edge, except a ``"neumann"`` edge (a symmetry plane), a
 periodic seam and the axis of an r–z domain.
 
 Discretisation: finite volumes on the faces of the grid, one flux per face, so every
 species and the electron energy are conserved to round-off. Electrons (and
-drift-diffusion ions) have :class:`~wellbalanced.Fluid1D`'s Scharfetter-Gummel fluxes,
+drift-diffusion ions) have `wellbalanced.Fluid1D`'s Scharfetter-Gummel fluxes,
 exact for a constant field between two centres; the ions' mass and momentum fluxes are
 Rusanov's (first order) with the speed ``sqrt(v_-^2 + v_+^2 + e (T_e + T_g) / M)``, and
 their forces are taken at the cells from the gradients of the interior faces (the sheath
@@ -73,7 +73,7 @@ The work of the field ``Gamma . E`` on a face is
 shared between its two cells in proportion to their distances to it. Backward Euler,
 every equation implicit, solved by Newton's method in the logarithms of the densities
 and of ``w``, the Jacobian by finite differences on a distance-2 colouring of the cells.
-:meth:`Fluid2D.steady_state` steps in pseudo-time with a growing step, then solves the
+`Fluid2D.steady_state` steps in pseudo-time with a growing step, then solves the
 steady equations.
 
 On refined patches all levels take one common step: the equations are implicit, so no
@@ -84,23 +84,23 @@ The unknowns are those of the leaf cells, and between levels each face is as lon
 the finer cell's side (a coarse cell has one face per finer neighbour): every face
 carries one flux, which its two cells take with opposite signs, so the totals are
 conserved to round-off across levels as on one. This is the state patchwork's
-refluxing (:class:`patchwork.FluxRegister`, Berger and Colella 1989) restores after
+refluxing (`patchwork.FluxRegister`, Berger and Colella 1989) restores after
 an explicit step, in which the coarse cell first takes its own coarse flux; here it
 takes the fine ones from the start (the tests check the two against each other). On a
 face between levels the coarse value is interpolated along the face to its middle, on
 the line through the finer centre (quadratic through the coarse cell and its two
-neighbours of its size, as patchwork's :class:`~patchwork.CellOperator` does): the
+neighbours of its size, as patchwork's `patchwork.CellOperator` does): the
 ghost value of the finer cell, so the face's difference is consistent. Densities,
 ``w``, temperatures and mobilities are interpolated in their logarithms (they stay
 positive), the potential and the ion velocities linearly.
 
-Coupled to the field through :func:`~wellbalanced.spatial.coupling.fluid_plasma`: the field
+Coupled to the field through `wellbalanced.spatial.coupling.fluid_plasma`: the field
 of the fluid's plasma, the fluid heated by that field, repeated to a fixed point at a
-given absorbed power, which :class:`~wellbalanced.spatial.DriverCoupling` turns into the
+given absorbed power, which `wellbalanced.spatial.DriverCoupling` turns into the
 coil current and the efficiency at a given generator power.
 
 Verification (``tests/unit/test_fluid2d.py``): particles and energy conserved to
-round-off over time steps; a slab against :class:`~wellbalanced.Fluid1D` to round-off;
+round-off over time steps; a slab against `wellbalanced.Fluid1D` to round-off;
 ambipolar diffusion in a slab and in an infinite cylinder against their closed forms
 (first order); the collisionless slab with uniform ionization against its closed form
 (``n_s = n_0 / 2``); a single-level patch grid against the tensor grid; the steady state
@@ -121,6 +121,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import xarray as xr
+from methodcard import ConvergenceProblem, method
 from plasmacoll.constants import ELECTRON_MASS, ELEMENTARY_CHARGE
 from scope_profiler import profile
 
@@ -259,18 +260,80 @@ class Fluid2DState:
         )
 
 
+def _ambipolar_problem() -> ConvergenceProblem:
+    """Ambipolar diffusion in a slab from a uniform source, against its closed form.
+
+    ``n = S L / (2 u_B) + S (L^2 / 4 - x^2) / (2 D_a)`` with the Bohm flux at the walls;
+    first order, since the Bohm flux takes the wall cell's density.
+    """
+    from wellbalanced.species import ELECTRON, Species
+
+    ion = Species.atomic("H2+", 2.016, 1)
+    te, tg, mu_e, mu_i, source, size = 4.0, 0.05, 2.0e4, 1.0e3, 1.0e22, 0.1
+    d_a = mu_i * mu_e * (te + tg) / (mu_i + mu_e)
+    u_b = np.sqrt(E * te / ion.mass)
+
+    def error(h: float) -> float:
+        edges = np.linspace(0.0, size, round(size / h) + 1)
+        grid = CellGrid(edges, [0.0, 1.0], boundaries=("dirichlet", "periodic"))
+        fluid = Fluid2D(
+            grid,
+            [FluidSpecies(ELECTRON, mu_e), FluidSpecies(ion, mu_i)],
+            ions="drift-diffusion",
+            electron_temperature=te,
+            gas_temperature=tg,
+            sources={"e": source, "H2+": source},
+        )
+        x = grid.xx - 0.5 * size
+        exact = source * size / (2 * u_b) + source / (2 * d_a) * (size**2 / 4 - x**2)
+        state = fluid.steady_state(fluid.pack({"H2+": exact}, te, 5 * te))
+        return float(np.max(np.abs(state.densities["H2+"] / exact - 1.0)))
+
+    return ConvergenceProblem(error, steps=[size / 25, size / 50, size / 100])
+
+
+@method(
+    equations={
+        "continuity": r"\partial_t n_s + \nabla\cdot\boldsymbol\Gamma_s = S_s",
+        "ion_momentum": r"\partial_t(n_i\mathbf v_i) + \nabla\cdot(n_i\mathbf v_i\mathbf v_i) = \frac{z_i e}{M_i} n_i\mathbf E - \frac{e T_g}{M_i}\nabla n_i - \nu_i n_i\mathbf v_i - L_i\mathbf v_i",
+        "ion_friction": r"\nu_i = \frac{e}{M_i\mu_i} \quad \text{or} \quad \nu_i = \frac{\sqrt{8 e T_g/(\pi M_i) + |\mathbf v_i|^2}}{\lambda_i}",
+        "electrons": r"\boldsymbol\Gamma_e = -\mu_e n_e\left(\mathbf E - \frac{\mathbf F}{e}\right) - \nabla(D_e n_e), \qquad \mathbf F = -\frac{e}{2}\mathrm{Re}\left(u\,\hat{\mathbf n}\times\mathbf B^*\right), \qquad \mu_e = \frac{e}{m_e \nu}",
+        "energy": r"\partial_t w + \nabla\cdot\boldsymbol\Gamma_w = -\boldsymbol\Gamma_e\cdot\mathbf E - \sum R\,\varepsilon_e + \frac{p_\mathrm{RF}}{e}, \qquad p_\mathrm{RF} = \tfrac12\mathrm{Re}(J E^*)",
+        "quasineutral": r"n_e = \sum_i z_i n_i, \qquad \nabla\cdot\sum_s z_s\boldsymbol\Gamma_s = 0",
+        "poisson": r"\nabla\cdot\mathbf E = \frac{e}{\varepsilon_0}\sum_s z_s n_s",
+        "sheath": r"\Gamma_{i,\mathrm{wall}} = n\,\mathrm{smoothmax}(v_n, u_B), \quad u_B = \sqrt{\frac{z e T_e}{M}}, \qquad \Gamma_{e,\mathrm{wall}} = \tfrac14 n_e \bar v_e\, e^{-(\phi - \phi_w)/T_e}, \quad 2T_e + (\phi - \phi_w) \text{ each}",
+        "rusanov": r"F_n = \tfrac12(n_l v_l + n_h v_h) - \tfrac12 c\,(n_h - n_l), \qquad c = \sqrt{v_l^2 + v_h^2 + e(z\bar T_e + T_g)/M}",
+        "divergence": r"(\nabla\cdot\boldsymbol\Gamma)_\mathrm{cell} = \frac{1}{V_\mathrm{cell}}\sum_f A_f \Gamma_f \quad (\text{one flux per face, across levels too})",
+    },
+    order=1,
+    assumptions=(
+        r"Scharfetter-Gummel fluxes for electrons and drift-diffusion ions with face coefficients the mean of the two cells; Rusanov (first order) for the inertial ions",
+        r"ions at $T_g$, born at rest, $L_i$ the rate of the reactions destroying them; the gas a fixed background unless coupled",
+        r"the quasi-neutral sheath edge takes the wall cell's density, a first-order error $u_B h/(2D)$; Poisson needs the Debye length resolved",
+        r"$\mathrm{smoothmax}(a, b) = \tfrac12(a + b + \sqrt{(a - b)^2 + \epsilon^2})$, $\epsilon = 10^{-2} u_B$; the RF force does no work",
+        r"coarse-fine faces: the coarse value interpolated quadratically along the face to its middle (logarithms of positive fields)",
+        r"the order is that of ambipolar diffusion in a slab from a uniform source (the problem of the tests)",
+    ),
+    references=(
+        "[Hagelaar and Pitchford, Plasma Sources Sci. Technol. 14, 722 (2005)](https://doi.org/10.1088/0963-0252/14/4/011)",
+        "[Zielke et al., Plasma Sources Sci. Technol. 31, 035019 (2022)](https://doi.org/10.1088/1361-6595/ac5845)",
+        "[Berger and Colella, J. Comput. Phys. 82, 64 (1989)](https://doi.org/10.1016/0021-9991(89)90035-1)",
+    ),
+    components=(scharfetter_gummel, CellGrid.transport_faces, Reaction),
+    problem=_ambipolar_problem,
+)
 class Fluid2D:
     """The plasma on the cells of a grid; see the module docstring.
 
     Args:
-        grid: A :class:`CellGrid` or a :class:`PatchGrid` (the field's).
+        grid: A `CellGrid` or a `PatchGrid` (the field's).
         species: The fluid species, the electrons (``"e"``) included; a species'
             ``mobility`` sets an ion's friction on the gas, ``e / (M mu)``, and
             ``diffusion`` overrides the Einstein relation of the drift-diffusion
             species (``D = mu T_e`` for the electrons, ``mu T_g`` for the rest).
         reactions: The volume reactions; reactants that are not fluid species must be
             in ``fixed``.
-        region: Where the plasma is: a :class:`PlasmaRegion`, a mask of the grid's
+        region: Where the plasma is: a `PlasmaRegion`, a mask of the grid's
             shape, or ``None`` for every cell.
         fixed: Densities of species not carried, e.g. the gas [m^-3] (cell fields).
         gas_temperature: ``T_g`` [eV], also the ions' temperature.
@@ -279,12 +342,12 @@ class Fluid2D:
         potential: ``"quasineutral"`` (sheath walls) or ``"poisson"`` (Fluid1D's).
         ions: ``"momentum"`` (inertia; the default of the quasi-neutral closure) or
             ``"drift-diffusion"`` (the only form with Poisson's equation); an ion
-            whose :class:`~wellbalanced.fluid1d.FluidSpecies` has ``momentum=True``
+            whose `wellbalanced.fluid1d.FluidSpecies` has ``momentum=True``
             has inertia either way.
         heating: The power to the electrons [W/m^3], a cell field: the field's
-            ``1/2 Re(J E*)`` (see :meth:`set_field`).
+            ``1/2 Re(J E*)`` (see `set_field`).
         electron_force: The in-plane force on an electron [N], two cell fields: the
-            field's RF-averaged Lorentz force (see :meth:`set_field`).
+            field's RF-averaged Lorentz force (see `set_field`).
         sources: External volume sources ``{species: rate}`` [m^-3 s^-1]; ions are
             born at rest.
         momentum_transfer: Names of the reactions whose rates per electron make up the
@@ -305,7 +368,7 @@ class Fluid2D:
         of the face are a distance ``delta_low + delta_high`` apart along its normal):
         quadratic through the coarse cell and its two plasma neighbours of its size
         along the face, linear where one is missing, the coarse value where both are
-        (patchwork's :class:`~patchwork.CellOperator` interpolates alike). ``None`` on
+        (patchwork's `patchwork.CellOperator` interpolates alike). ``None`` on
         one level; else the faces (among the interior ones), whether their ``low`` cell
         is the coarse one, and the cells and weights, ``(m, 3)`` each.
         """
@@ -569,7 +632,7 @@ class Fluid2D:
         """The values of a cell field on the two sides of every interior face.
 
         The cells' own values, except the coarse side of a face between levels, which
-        is interpolated along the face (:meth:`_coarse_fine_stencils`); a ``positive``
+        is interpolated along the face (`_coarse_fine_stencils`); a ``positive``
         field (a density, a temperature, a mobility) in its logarithm, so it stays
         positive.
         """
@@ -1027,9 +1090,9 @@ class Fluid2D:
     def _damping(self, u: np.ndarray, delta: np.ndarray, is_log: np.ndarray) -> float:
         """The fraction of a Newton step to take.
 
-        A logarithm changes by at most :data:`MAX_LOG_STEP`, the potential by at most
-        :data:`MAX_POTENTIAL_STEP` times the largest ``T_e`` and an ion velocity by at
-        most :data:`MAX_VELOCITY_STEP` times the largest Bohm speed.
+        A logarithm changes by at most `MAX_LOG_STEP`, the potential by at most
+        `MAX_POTENTIAL_STEP` times the largest ``T_e`` and an ion velocity by at
+        most `MAX_VELOCITY_STEP` times the largest Bohm speed.
         """
         fraction = 1.0
         largest = float(np.max(np.abs(delta[is_log])))
@@ -1065,7 +1128,7 @@ class Fluid2D:
         """Solve the (backward Euler or steady) equations; return the solution and success.
 
         Newton's method with the finite-difference Jacobian. Once the steps are taken
-        whole (no damping, :meth:`_damping`) and shrink at least four times per
+        whole (no damping, `_damping`) and shrink at least four times per
         iteration, the Jacobian and its LU are kept for the next iteration. A time step
         gives up after 15 iterations (a shorter one is cheaper), the steady equations
         after 40.
@@ -1125,6 +1188,18 @@ class Fluid2D:
         return u
 
     @profile("wellbalanced.Fluid2D.steady_state", tags=_PROFILE_TAGS)
+    @method(
+        equations={
+            "backward_euler": r"\frac{u^{n+1} - u^n}{\Delta t} = F(u^{n+1}), \qquad u = (\ln n_s,\ \mathbf v_i,\ \ln w,\ \phi)",
+            "newton": r"J\,\delta = -r, \qquad J_{:,j} \approx \frac{r(u + \epsilon_j e_j) - r(u)}{\epsilon_j}, \quad \epsilon_j = 10^{-7}\max(1, |u_j|)",
+            "damping": r"|\delta_{\ln}| \le 2, \qquad |\delta\phi| \le 2\max T_e, \qquad |\delta\mathbf v| \le 0.5\sqrt{e\max T_e/M}",
+            "pseudo_time": r"\Delta t \leftarrow \text{growth}^2\,\Delta t \text{ after at most 4 iterations, else growth}\cdot\Delta t; \qquad \Delta t \leftarrow \Delta t/4 \text{ after a failure}",
+        },
+        assumptions=(
+            r"forward differences on a distance-2 colouring of the cells; the LU (`splu`) reused while undamped steps shrink fourfold",
+            r"converged when every log change is below $10^{-10}$ and every linear one below $10^{-10}(1 + |u|)$; 15 iterations per step, 40 for the steady equations",
+        ),
+    )
     def steady_state(
         self,
         unknowns: np.ndarray,
@@ -1164,7 +1239,7 @@ class Fluid2D:
     def state(
         self, unknowns: np.ndarray, time: float = 0.0, converged: bool = True
     ) -> Fluid2DState:
-        """The :class:`Fluid2DState` of a vector of unknowns."""
+        """The `Fluid2DState` of a vector of unknowns."""
         densities, velocities, te, phi = self._unpack(unknowns)
         rates = self._reactions(densities, te)[0]
         return Fluid2DState(
@@ -1190,7 +1265,7 @@ class Fluid2D:
     ) -> None:
         """Heat the electrons with a field's ``1/2 Re(J E*)`` and push them with its force.
 
-        ``solution`` is on the same grid (an :class:`InductiveField2D` of this grid,
+        ``solution`` is on the same grid (an `InductiveField2D` of this grid,
         scaled to its coil current); ``lorentz`` scales the force (``False``: none).
         """
         if solution.grid.size != self.grid.size:
@@ -1210,7 +1285,7 @@ class Fluid2D:
     ) -> None:
         """Change the fixed species' densities [m^-3] and the gas temperature [eV].
 
-        The gas of a neutral model (:func:`~wellbalanced.spatial.couple_neutrals`):
+        The gas of a neutral model (`wellbalanced.spatial.couple_neutrals`):
         ``densities`` replace those of fixed species by name (cell fields).
         """
         for name, value in (densities or {}).items():
@@ -1286,7 +1361,7 @@ class Fluid2D:
     def wall_fluxes(self, state: Fluid2DState) -> dict[str, np.ndarray]:
         """The flux of every species out through each wall face [m^-2 s^-1].
 
-        Over the faces of :attr:`wall_faces`; ``"energy"`` the electrons' energy flux
+        Over the faces of `wall_faces`; ``"energy"`` the electrons' energy flux
         [eV m^-2 s^-1].
         """
         return self._terms(state)[2][1]

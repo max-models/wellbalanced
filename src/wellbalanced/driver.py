@@ -1,9 +1,9 @@
 """A 0D model of an inductive RF driver: a global model and a transformer model.
 
 The driver is a cylinder of radius ``R``, its plasma heated by an RF coil of ``N``
-turns, radius ``b`` and length ``l`` around it. :class:`RFDriver` couples two models:
+turns, radius ``b`` and length ``l`` around it. `RFDriver` couples two models:
 
-- a :class:`~wellbalanced.GlobalModel` of the driver plasma, which fixes the electron
+- a `wellbalanced.GlobalModel` of the driver plasma, which fixes the electron
   density and temperature for the power the plasma absorbs;
 - a transformer model of the coupling (Piejak, Godyak and Alexandrovich, Plasma
   Sources Sci. Technol. 1, 179, 1992; Lieberman and Lichtenberg, *Principles of
@@ -22,7 +22,7 @@ and the impedance of the skin layer around the plasma,
     Z_p = (2 pi R / l) (k / sigma),   k = sqrt(i omega mu0 sigma),
 
 the coil sees ``Z_s = i omega L_11 + omega^2 M^2 / (Z_p + i omega L_2)``. The plasma is
-the cold, collisional one of :mod:`wellbalanced.spatial.inductive`,
+the cold, collisional one of `wellbalanced.spatial.inductive`,
 ``sigma = n_e e^2 / (m_e (nu_m + i omega))``: ``k / sigma`` is the surface impedance of
 the skin layer, ``(1 + i) / (sigma delta)`` in the collisional limit (``nu_m >> omega``,
 ``delta = sqrt(2 / (omega mu0 sigma))``) and ``i omega mu0 c / omega_pe`` with the
@@ -30,15 +30,15 @@ electron-inertia skin depth ``c / omega_pe`` when ``nu_m << omega``, so both
 limits, and the resistance ``R_p = Re Z_p`` and electron-inertia inductance
 ``Im Z_p / omega`` of the textbook model, come out of one expression. It is the
 thin-skin limit of the uniform plasma column in a long solenoid, whose exact
-impedance :func:`solenoid_impedance` gives; :func:`transformer_impedance` agrees
+impedance `solenoid_impedance` gives; `transformer_impedance` agrees
 with it to order ``delta / R``.
 
 A real driver coil is short (six turns over 17 cm around a 24 cm plasma): its
-inductance is Nagaoka's coefficient ``K`` (:func:`nagaoka_coefficient`) times the
+inductance is Nagaoka's coefficient ``K`` (`nagaoka_coefficient`) times the
 long-solenoid one. It is modelled as the long solenoid of ``N sqrt(K)`` turns, which
 has that inductance: ``L_11`` is multiplied by ``K`` and ``M`` by ``sqrt(K)``, so the
 plasma's share of the impedance scales with ``K`` as well, as the exact solution's
-(:func:`solenoid_impedance`) does; ``field_factor`` overrides ``K``.
+(`solenoid_impedance`) does; ``field_factor`` overrides ``K``.
 
 The plasma coupled to the coil is the length of the coil; the global model takes
 the whole driver, which may be longer (a longer driver at the same coil spreads the
@@ -46,7 +46,7 @@ power over more plasma).
 
 What a 0D model cannot give: the distance between the coil and an electromagnetic
 shield and the mutual coupling of several drivers change the field around the
-coil, not the plasma; they are in the 2D field of :mod:`wellbalanced.spatial.inductive`.
+coil, not the plasma; they are in the 2D field of `wellbalanced.spatial.inductive`.
 Neither is the non-local (stochastic) heating of low pressures, which the cold
 plasma's collision frequency leaves out.
 """
@@ -62,6 +62,7 @@ from typing import Any, Literal
 
 import numpy as np
 import xarray as xr
+from methodcard import Rule, method
 from plasmacoll import CrossSection
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
 from scipy.constants import mu_0 as MU_0
@@ -85,7 +86,55 @@ __all__ = [
 
 E = ELEMENTARY_CHARGE
 
+_PLASMA_RANGES = {
+    "electron_density": (1.0e16, 1.0e18),
+    "collision_frequency": (1.0e6, 1.0e8),
+    "frequency": (0.5e6, 4.0e6),
+}
 
+
+def _sympy_conductivity():
+    """``sigma`` in SymPy, with its symbols (for the rules)."""
+    import sympy
+
+    ne, nu, f = sympy.symbols(
+        "electron_density collision_frequency frequency", positive=True
+    )
+    omega = 2 * sympy.pi * f
+    sigma = (
+        ne * sympy.Float(E) ** 2 / (sympy.Float(ELECTRON_MASS) * (nu + sympy.I * omega))
+    )
+    return sigma, omega
+
+
+def _conductivity_rules() -> dict:
+    """The SymPy rule of `plasma_conductivity` (for the tests)."""
+    import sympy
+
+    sigma, _ = _sympy_conductivity()
+    return {
+        "resistive": Rule(
+            sympy.re(sigma),
+            implementation=lambda **kwargs: plasma_conductivity(**kwargs).real,
+            ranges=_PLASMA_RANGES,
+            rtol=1e-12,
+        )
+    }
+
+
+@method(
+    equations={
+        "conductivity": r"\sigma = \frac{n_e e^2}{m_e (\nu_m + i\omega)}",
+        "resistive": r"\mathrm{Re}\,\sigma = \frac{n_e e^2 \nu_m}{m_e (\nu_m^2 + \omega^2)}",
+    },
+    assumptions=(
+        r"cold electrons with friction, $m_e \dot u = -eE - m_e \nu_m u$; time dependence $e^{i\omega t}$",
+    ),
+    references=(
+        "Lieberman and Lichtenberg, Principles of Plasma Discharges and Materials Processing, 2nd ed. (2005), sec. 12.2",
+    ),
+    symbolic=_conductivity_rules,
+)
 def plasma_conductivity(
     electron_density: float, collision_frequency: float, frequency: float
 ) -> complex:
@@ -102,6 +151,30 @@ def _wavenumber(sigma: complex, frequency: float) -> complex:
     return complex(k if k.real >= 0.0 else -k)
 
 
+def _nagaoka_rules() -> dict:
+    """The SymPy rule of `nagaoka_coefficient` (for the tests)."""
+    import sympy
+
+    d, length = sympy.symbols("diameter length", positive=True)
+    m = d**2 / (d**2 + length**2)
+    k, kp = sympy.sqrt(m), sympy.sqrt(1 - m)
+    big_k, big_e = sympy.elliptic_k(m), sympy.elliptic_e(m)
+    rule = 4 / (3 * sympy.pi * kp) * ((kp**2 / k**2) * (big_k - big_e) + big_e - k)
+    ranges = {"diameter": (0.05, 0.5), "length": (0.05, 0.5)}
+    return {"coefficient": Rule(rule, ranges=ranges, rtol=1e-10)}
+
+
+@method(
+    equations={
+        "coefficient": r"K = \frac{4}{3\pi k'}\left(\frac{k'^2}{k^2}\big(\mathrm{K}(k) - \mathrm{E}(k)\big) + \mathrm{E}(k) - k\right), \qquad k^2 = \frac{d^2}{d^2 + l^2}, \quad k'^2 = 1 - k^2",
+    },
+    assumptions=(
+        r"a single-layer solenoid of diameter $d$ and length $l$; $K = 1$ for a long coil, 0.6884 for $d = l$",
+        r"$\mathrm{K}$, $\mathrm{E}$ the complete elliptic integrals (SciPy's `ellipk`, `ellipe` of the parameter $k^2$)",
+    ),
+    references=("Nagaoka's coefficient (no bibliographic details in the code)",),
+    symbolic=_nagaoka_rules,
+)
 def nagaoka_coefficient(diameter: float, length: float) -> float:
     """Nagaoka's coefficient of a solenoid: its inductance over the long-solenoid one.
 
@@ -150,6 +223,74 @@ class Coil:
         return self.factor * MU_0 * np.pi * self.radius**2 * self.turns**2 / self.length
 
 
+_COIL_RANGES = {
+    "turns": (3.0, 10.0),
+    "coil_radius": (0.12, 0.2),
+    "coil_length": (0.1, 0.3),
+    "plasma_radius": (0.05, 0.1),
+}
+
+
+def _transformer_rules() -> dict:
+    """The SymPy rule of the resistance of `transformer_impedance` (for the tests)."""
+    import sympy
+
+    sigma, omega = _sympy_conductivity()
+    n, b, length, r = sympy.symbols(
+        "turns coil_radius coil_length plasma_radius", positive=True
+    )
+    mu0 = sympy.Float(MU_0)
+    d = 2 * b
+    m = d**2 / (d**2 + length**2)
+    k, kp = sympy.sqrt(m), sympy.sqrt(1 - m)
+    factor = (
+        4
+        / (3 * sympy.pi * kp)
+        * (
+            (kp**2 / k**2) * (sympy.elliptic_k(m) - sympy.elliptic_e(m))
+            + sympy.elliptic_e(m)
+            - k
+        )
+    )
+    mutual = sympy.sqrt(factor) * mu0 * sympy.pi * r**2 * n / length
+    l_2 = mu0 * sympy.pi * r**2 / length
+    wavenumber = sympy.sqrt(sympy.I * omega * mu0 * sigma)
+    z_p = 2 * sympy.pi * r / length * wavenumber / sigma
+    rule = sympy.re(omega**2 * mutual**2 / (z_p + sympy.I * omega * l_2))
+
+    def resistance(turns, coil_radius, coil_length, plasma_radius, **plasma):
+        coil = Coil(turns, coil_radius, coil_length)
+        return transformer_impedance(coil, plasma_radius, **plasma).real
+
+    return {
+        "resistance": Rule(
+            rule,
+            implementation=resistance,
+            ranges={**_COIL_RANGES, **_PLASMA_RANGES},
+            rtol=1e-9,
+        )
+    }
+
+
+@method(
+    equations={
+        "impedance": r"Z_s = i\omega L_{11} + \frac{\omega^2 M^2}{Z_p + i\omega L_2}",
+        "inductances": r"L_{11} = K \frac{\mu_0 \pi b^2 N^2}{l}, \qquad M = \sqrt{K}\, \frac{\mu_0 \pi R^2 N}{l}, \qquad L_2 = \frac{\mu_0 \pi R^2}{l}",
+        "skin_layer": r"Z_p = \frac{2\pi R}{l}\, \frac{k}{\sigma}, \qquad k = \sqrt{i\omega\mu_0\sigma}\ (\mathrm{Re}\,k > 0)",
+        "resistance": r"R_s = \mathrm{Re}\, Z_s",
+    },
+    assumptions=(
+        r"a thin skin layer: the thin-skin limit of `solenoid_impedance`, error $O(\delta/R)$; for $\delta \gg R$ its $R_s$ falls like $\sqrt\sigma$ instead of $\sigma$",
+        r"the short coil as the long solenoid of $N\sqrt{K}$ turns ($K$ Nagaoka's coefficient or `field_factor`)",
+        r"$\nu_m \gg \omega$: $k/\sigma = (1 + i)/(\sigma\delta)$; $\nu_m \ll \omega$: $k/\sigma = i\omega\mu_0 c/\omega_{pe}$; with $n_e \le 0$ the empty coil $i\omega L_{11}$",
+    ),
+    references=(
+        "[Piejak, Godyak and Alexandrovich, Plasma Sources Sci. Technol. 1, 179 (1992)](https://doi.org/10.1088/0963-0252/1/3/006)",
+        "Lieberman and Lichtenberg, Principles of Plasma Discharges and Materials Processing, 2nd ed. (2005), sec. 12.2",
+    ),
+    components=(plasma_conductivity, nagaoka_coefficient),
+    symbolic=_transformer_rules,
+)
 def transformer_impedance(
     coil: Coil,
     plasma_radius: float,
@@ -162,7 +303,7 @@ def transformer_impedance(
     The transformer model of the module docstring; ``Re`` is the resistance ``R_s``
     through which the plasma absorbs ``R_s |I|^2 / 2``. A thin-skin model, for skin
     depths up to a fraction of ``R``: for a faint plasma (``delta >> R``) its ``R_s``
-    falls like ``sqrt(sigma)`` instead of ``sigma``; :func:`solenoid_impedance` holds
+    falls like ``sqrt(sigma)`` instead of ``sigma``; `solenoid_impedance` holds
     there.
     """
     if not 0.0 < plasma_radius < coil.radius:
@@ -182,6 +323,53 @@ def transformer_impedance(
     return complex(1j * omega * l_11 + omega**2 * mutual**2 / (z_p + 1j * omega * l_2))
 
 
+def _solenoid_rules() -> dict:
+    """The SymPy rule of the resistance of `solenoid_impedance` (for the tests)."""
+    import sympy
+
+    sigma, omega = _sympy_conductivity()
+    n, b, length, r = sympy.symbols(
+        "turns coil_radius coil_length plasma_radius", positive=True
+    )
+    mu0 = sympy.Float(MU_0)
+    q = sympy.sqrt(-sympy.I * omega * mu0 * sigma)
+    ratio = sympy.besselj(1, q * r) / sympy.besselj(0, q * r)
+    gap = sympy.pi * (b**2 - r**2)
+    rule = sympy.re(
+        sympy.I * omega * mu0 * n**2 / length * (gap + 2 * sympy.pi * r * ratio / q)
+    )
+
+    # the gap outside the plasma is reactive only: the resistance has no coil radius
+    def resistance(turns, coil_length, plasma_radius, coil_radius=0.2, **plasma):
+        coil = Coil(turns, coil_radius, coil_length, field_factor=1.0)
+        return solenoid_impedance(coil, plasma_radius, **plasma).real
+
+    return {
+        "resistance": Rule(
+            rule,
+            implementation=resistance,
+            ranges={**_COIL_RANGES, **_PLASMA_RANGES},
+            rtol=1e-9,
+        )
+    }
+
+
+@method(
+    equations={
+        "field": r"B_z = B_0 \frac{J_0(q r)}{J_0(q R)}, \qquad q^2 = -i\omega\mu_0\sigma",
+        "impedance": r"Z = K\, \frac{i\omega\mu_0 N^2}{l}\left(\pi (b^2 - R^2) + \frac{2\pi R\, J_1(qR)}{q\, J_0(qR)}\right)",
+        "resistance": r"R_s = \mathrm{Re}\, Z",
+    },
+    assumptions=(
+        r"a uniform plasma column of radius $R$ in a long solenoid of radius $b > R$: exact for any skin depth",
+        r"$J_1/J_0$ with SciPy's `jve` (both scaled by $e^{-|\mathrm{Im}\,x|}$), so the ratio does not overflow",
+    ),
+    references=(
+        "Lieberman and Lichtenberg, Principles of Plasma Discharges and Materials Processing, 2nd ed. (2005), sec. 12.2",
+    ),
+    components=(plasma_conductivity,),
+    symbolic=_solenoid_rules,
+)
 def solenoid_impedance(
     coil: Coil,
     plasma_radius: float,
@@ -194,7 +382,7 @@ def solenoid_impedance(
     Inside the column ``B_z = B_0 J_0(q r) / J_0(q R)`` with ``q^2 = -i omega mu0 sigma``,
     so ``Z = i omega mu0 N^2 / l (pi (b^2 - R^2) + 2 pi R J_1(q R) / (q J_0(q R)))``,
     times the coil's inductance ratio ``K``; any skin depth, the reference of
-    :func:`transformer_impedance`.
+    `transformer_impedance`.
     """
     if not 0.0 < plasma_radius < coil.radius:
         raise ValueError("the plasma must be inside the coil")
@@ -282,6 +470,58 @@ class DriverState:
         return dataset
 
 
+def _driver_rules() -> dict:
+    """The SymPy rule of the edge-to-centre ratio of `RFDriver.chamber` (for the tests)."""
+    import sympy
+
+    r, length, mfp = sympy.symbols("radius length ion_mean_free_path", positive=True)
+    ends, side = 2 * sympy.pi * r**2, 2 * sympy.pi * r * length
+    h_l = sympy.Float("0.86") / sympy.sqrt(3 + length / (2 * mfp))
+    h_r = sympy.Float("0.8") / sympy.sqrt(4 + r / mfp)
+    rule = (h_l * ends + h_r * side) / (ends + side)
+
+    def h_factor(radius, length, ion_mean_free_path):
+        driver = RFDriver(
+            species=(),
+            reactions=(),
+            fixed={},
+            radius=radius,
+            length=length,
+            coil_turns=6,
+            coil_radius=2.0 * radius,
+            frequency=1.0e6,
+            network_resistance=0.0,
+            momentum_transfer=(),
+            ion_mean_free_path=ion_mean_free_path,
+        )
+        return driver.chamber.h_factor
+
+    ranges = {
+        "radius": (0.05, 0.2),
+        "length": (0.1, 0.4),
+        "ion_mean_free_path": (0.005, 0.1),
+    }
+    return {"h_factor": Rule(rule, implementation=h_factor, ranges=ranges, rtol=1e-12)}
+
+
+@method(
+    equations={
+        "h_factor": r"h = \frac{h_L A_\mathrm{ends} + h_R A_\mathrm{side}}{A_\mathrm{ends} + A_\mathrm{side}}, \qquad h_L = \frac{0.86}{\sqrt{3 + l_d/(2\lambda_i)}}, \qquad h_R = \frac{0.8}{\sqrt{4 + R/\lambda_i}}",
+        "collision_frequency": r"\nu_m = \frac{\sum_\mathrm{momentum\ transfer} R}{n_e}, \qquad n_\mathrm{skin} = f_\mathrm{skin}\, n_e",
+        "current": r"I = \sqrt{\frac{2P}{R_s}}, \qquad \eta = \frac{R_s}{R_s + R_\mathrm{net}}, \qquad P_\mathrm{RF} = \frac{P}{\eta}, \qquad V_\mathrm{coil} = |Z_s|\, I",
+        "skin_depth": r"\delta = \frac{1}{\mathrm{Re}\, k}",
+    },
+    assumptions=(
+        r"the global model takes the whole driver; the coupled plasma is the coil's length",
+        r"no stochastic (non-local) heating, no shield distance or mutual coupling of drivers: those are in the 2D field",
+        r"the low-pressure edge-to-centre ratios for the ion mean free path $\lambda_i$",
+    ),
+    references=(
+        "Lieberman and Lichtenberg, Principles of Plasma Discharges and Materials Processing, 2nd ed. (2005), sec. 10.2 and 12.2",
+    ),
+    components=(GlobalModel, transformer_impedance, solenoid_impedance),
+    symbolic=_driver_rules,
+)
 @dataclass
 class RFDriver:
     """A cylindrical RF driver: its plasma's global model and its coil.
@@ -310,9 +550,9 @@ class RFDriver:
             volume average.
         field_factor: The coil's inductance over the long-solenoid one;
             Nagaoka's coefficient if ``None``.
-        coupling: ``"transformer"`` (:func:`transformer_impedance`) or
-            ``"solenoid"``, the exact uniform column (:func:`solenoid_impedance`).
-        model_options: Further fields of the :class:`GlobalModel` (gas
+        coupling: ``"transformer"`` (`transformer_impedance`) or
+            ``"solenoid"``, the exact uniform column (`solenoid_impedance`).
+        model_options: Further fields of the `GlobalModel` (gas
             temperature, wall reactions, ion wall products, ...).
     """
 
@@ -462,7 +702,7 @@ def illustrative_hydrogen_driver(**overrides: Any) -> RFDriver:
     The cross sections are constants of plausible size above their thresholds
     (``CrossSection.constant``), round numbers, not hydrogen data: they let the
     model run until checked e-H2 and e-H data are supplied (LXCat, Janev et al.).
-    It warns when called. ``overrides`` replace fields of the :class:`RFDriver`.
+    It warns when called. ``overrides`` replace fields of the `RFDriver`.
     """
     warnings.warn(
         "illustrative_hydrogen_driver uses placeholder cross sections, not data",

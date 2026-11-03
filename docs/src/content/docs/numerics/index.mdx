@@ -1,0 +1,113 @@
+---
+title: Overview
+description: The equations of wellbalanced, from the global model to the 2D fluids and the RF field, and what the models leave out.
+sidebar:
+  label: Overview
+---
+
+import MethodCard from '@max-models/starlight-theme/components/MethodCard.astro';
+
+wellbalanced models the low-temperature plasmas of negative-ion sources, neutralizers and
+magnetrons at three levels of detail: volume-averaged (0D) balances of every species and the
+electron energy, 1D and 2D fluids of the same species on a grid, and the inductive RF field
+that heats them. The same reactions drive all of them, so a model can be checked against the
+level below it.
+
+Each equation on these pages is declared on the code that implements it, as a method card, and
+checked by the tests: 26 closed forms against SymPy rules and seven discretisations against
+their order of convergence. The pages of the section list the cards module by module; this one
+shows how they fit together.
+
+## The global models
+
+1. **[Reactions](/wellbalanced/numerics/reactions/)** run at $R = K(T)\prod_r n_r$, with rate
+   coefficients from plasmacoll's cross sections (Maxwellian averages), fits, or the
+   collisional-radiative tables of [OpenCR](/wellbalanced/numerics/cr/).
+2. **[Global model](/wellbalanced/numerics/global-model/):** the particle balance of every
+   species, quasi-neutrality, Bohm losses through the walls (with an edge-to-centre ratio and
+   cusp leak widths), the electron energy with the sheath of floating walls, and optionally the
+   gas temperature. The steady state is a pseudo-time integration in the logarithms of the
+   unknowns, polished by a root finder:
+
+<MethodCard name="wellbalanced.global_model.GlobalModel" headingLevel={3} />
+
+3. Three devices are global models with their own closures: the
+   **[neutralizer](/wellbalanced/numerics/neutralizer/)** (a fast beam's charge states on the
+   gas and its plasma, iterated to a fixed point), the
+   **[RF driver](/wellbalanced/numerics/driver/)** (the transformer model of the coil, with
+   Nagaoka's coefficient and the exact solenoid as reference) and the
+   **[magnetron](/wellbalanced/numerics/magnetron/)** (the ionization region with sputtering,
+   the sputter wind and secondary-electron heating).
+
+## The fluid models
+
+4. **[Fluid 1D](/wellbalanced/numerics/fluid1d/):** drift-diffusion of every species with
+   Scharfetter-Gummel fluxes, the electron energy equation and Poisson's equation, ions
+   optionally with inertia; backward Euler and Newton's method:
+
+<MethodCard name="wellbalanced.fluid1d.Fluid1D" headingLevel={3} />
+
+5. **[Fluid 2D](/wellbalanced/numerics/spatial-fluid/)** on the cells of a
+   **[cell grid](/wellbalanced/numerics/spatial-grid/)** (a cut or r–z, tensor or refined
+   patches): inertial ions with Rusanov fluxes, quasi-neutral with sheath walls or with
+   Poisson's equation, heated and pushed by the RF field.
+6. **[Inductive field 2D](/wellbalanced/numerics/spatial-inductive/):** the magnetoquasistatic
+   field of the coil and a cold or viscous electron plasma, time-harmonic or stepped in time;
+   **[in 3D](/wellbalanced/numerics/spatial-inductive3d/)** on a Yee
+   **[edge grid](/wellbalanced/numerics/spatial-edges/)** with surface-impedance conductors on
+   **[cut cells](/wellbalanced/numerics/spatial-cutcell/)**, solved directly or by
+   **[COCG](/wellbalanced/numerics/spatial-iterative/)**.
+7. **[Field and plasma](/wellbalanced/numerics/spatial-coupling/)** are iterated to the
+   absorbed or the generator power; the **[neutral gas](/wellbalanced/numerics/spatial-neutrals/)**
+   (H and H2 as Navier-Stokes fluids with kinetic walls) is iterated with the plasma.
+
+## The magnetron plane
+
+8. **[Drift fluid 2D](/wellbalanced/numerics/driftfluid2d/):** the axial-azimuthal plane with
+   Hall-tensor electrons, inertial ions, the gas and full Poisson, stepped by SSP-RK3 with an
+   implicit permittivity; its linear modes and the
+   **[local dispersion relations](/wellbalanced/numerics/dispersion/)** (cold or kinetic ions)
+   describe the gradient-drift instability behind the spokes.
+9. **[Gas dynamics](/wellbalanced/numerics/gasdynamics/):** argon and the sputtered metal as
+   one compressible gas (MUSCL, HLLC, SSP-RK3), driven by the sputter wind.
+10. The **[transport budget](/wellbalanced/numerics/transport/)** is a diagnostic of PIC
+    moments: the $y$-averaged momentum identity of the cross-field flux.
+
+## Units and conventions
+
+Temperatures in eV ($T$ stands for $k_B T/e$), everything else SI; `GasDynamics` takes its
+temperatures in K. Time-harmonic fields are amplitudes of $e^{i\omega t}$. In a 2D cut,
+volumes, powers and currents are per metre along $z$ (a device's are `depth` times them);
+in r–z they are totals. In the magnetron plane $x$ runs from the cathode to the anode and $y$
+along $\mathbf E\times\mathbf B$; gradient lengths $L = f/f'$ are signed.
+
+## Not in the models
+
+- No Boltzmann-electron closure: the electrons are always a drift-diffusion fluid;
+  quasi-neutrality only in `Fluid2D`.
+- `GlobalModel`: a uniform plasma with Maxwellian electrons; the edge-to-centre ratio is an
+  input; per-ion and per-charge wall energies mix for $Z > 1$.
+- `Fluid1D`: constant transport coefficients, no gas or ion energy equation. `Fluid2D`: ions at
+  $T_g$, a fixed gas unless coupled, no volume sources with an electron energy.
+- The inductive field: no displacement current, no in-plane drift force in the momentum
+  balance, no viscous time stepper; the 0D driver has no stochastic heating, shields or
+  mutual coupling.
+- `DriftFluid2D`: no electron inertia, no electron-ion or ion-ion collisions, no metal, no
+  race-track curvature, no gas temperature. `Magnetron`: no metastables, no multiply charged
+  ions, no gas heating.
+- `GasDynamics` and `NeutralFluid2D` are continuum models at Knudsen numbers of 0.1 to 1,
+  without a kinetic check.
+- Several data sets are placeholders, said where they are used: the illustrative hydrogen
+  driver and deuterium neutralizer, the magnetron materials, the drift fluid's argon rates.
+
+## Verification
+
+Besides the checks of the cards, the tests compare the global model's balances with closed
+forms (Te from the particle balance, negative ions, wall recombination), the neutralizer's
+fractions with plasmacoll's, the transformer model with the Bessel column it is the thin-skin
+limit of, `Fluid2D` on a slab with `Fluid1D` to round-off and with ambipolar and
+collisionless closed forms, the coupled fluid column with the global model, the 2D field with
+line currents, loops, solenoids and conducting columns, the 3D field with its 2D limit and
+cut cells with planes and tubes, the neutral gas with its 0D limit, the drift fluid's growth
+rates with its local dispersion relation, and the gas dynamics with Sod's problem and its
+conservation.

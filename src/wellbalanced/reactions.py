@@ -1,6 +1,6 @@
 """Reactions: reactants, products, a rate coefficient and the energy they exchange.
 
-A :class:`Reaction` turns its reactants into its products at the volume rate
+A `Reaction` turns its reactants into its products at the volume rate
 ``R = K(T) prod n_reactant`` (m^-3 s^-1), with ``K`` in m^3/s for two
 reactants. ``K`` depends on the electron temperature for electron-impact
 reactions and on the gas temperature for reactions between heavy species. The
@@ -9,9 +9,9 @@ electrons lose ``electron_energy_loss`` (eV) per reaction and the gas gains
 lose ``3 (m_e / M) (T_e - T_g)`` per collision to the target of mass ``M``,
 which the gas gains.
 
-Rates come from cross sections through plasmacoll (:meth:`Reaction.from_process`,
-:meth:`Reaction.from_cross_section`), or are given directly: a constant, a
-:class:`plasmacoll.RateTable` or any function of the temperature in eV.
+Rates come from cross sections through plasmacoll (`Reaction.from_process`,
+`Reaction.from_cross_section`), or are given directly: a constant, a
+`plasmacoll.RateTable` or any function of the temperature in eV.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
+from methodcard import Rule, method
 from plasmacoll import CollisionProcess, CrossSection, RateTable
 from plasmacoll.constants import ELECTRON_MASS
 
@@ -33,6 +34,38 @@ TEMPERATURES = ("electron", "gas")
 RateFunction = Callable[[np.ndarray | float], np.ndarray | float]
 
 
+def _elastic_rules() -> dict:
+    """The SymPy rule of the elastic loss of `Reaction` (for the tests)."""
+    import sympy
+
+    te, tg, mass = sympy.symbols("te tg mass", positive=True)
+    rule = 3 * sympy.Float(ELECTRON_MASS) / mass * (te - tg)
+
+    def loss(te: float, tg: float, mass: float) -> float:
+        reaction = Reaction(("e", "X"), ("e", "X"), 1.0, elastic_mass=mass)
+        return reaction.electron_loss(te, tg)
+
+    ranges = {"te": (0.5, 20.0), "tg": (0.01, 0.1), "mass": (1.6e-27, 7.0e-26)}
+    return {"elastic": Rule(rule, implementation=loss, ranges=ranges, rtol=1e-12)}
+
+
+@method(
+    equations={
+        "rate": r"R = K(T) \prod_{r} n_r \quad [\mathrm{m^{-3}\,s^{-1}}], \qquad T = T_e \text{ (electron impact) or } T_g \text{ (heavy particles)}",
+        "stoichiometry": r"\nu_s = (\text{products} - \text{reactants})_s, \qquad \frac{dn_s}{dt} \mathrel{+}= \nu_s R",
+        "energy": r"\frac{dw}{dt} \mathrel{-}= R\,\varepsilon_e, \qquad \text{the gas gains } R\,\varepsilon_g",
+        "elastic": r"\varepsilon_e = 3\,\frac{m_e}{M}\,(T_e - T_g) = \varepsilon_g",
+    },
+    assumptions=(
+        r"$K$ a constant, a plasmacoll `RateTable` or a function of the temperature in eV",
+        r"an elastic reaction keeps its reactants and moves $3 (m_e/M)(T_e - T_g)$ per collision from the electrons to the gas",
+        r"a reactant that is also a product (the electron of `e + H2 -> e + H + H`) nets out of $\nu_s$",
+    ),
+    references=(
+        "Lieberman and Lichtenberg, Principles of Plasma Discharges and Materials Processing, 2nd ed. (2005), ch. 3",
+    ),
+    symbolic=_elastic_rules,
+)
 @dataclass(frozen=True)
 class Reaction:
     """One reaction of the model.
@@ -41,7 +74,7 @@ class Reaction:
         reactants: Species names, repeated for a species that appears twice.
         products: Species names, repeated likewise.
         rate: ``K`` in m^3/s (for two reactants): a number, a
-            :class:`plasmacoll.RateTable`, or a function of the temperature in eV.
+            `plasmacoll.RateTable`, or a function of the temperature in eV.
         temperature: ``"electron"`` or ``"gas"``, the temperature ``K`` depends on.
         electron_energy_loss: Energy in eV the electrons lose per reaction
             (negative for a gain, e.g. superelastic or detachment energy).
@@ -126,6 +159,15 @@ class Reaction:
         return self.gas_heating
 
     @classmethod
+    @method(
+        equations={
+            "maxwellian": r"K(T) = \langle\sigma v\rangle = \sqrt{\frac{8}{\pi \mu}}\,(eT)^{-3/2} \int_0^\infty \sigma(\varepsilon)\, \varepsilon\, e^{-\varepsilon / eT}\, d\varepsilon",
+        },
+        assumptions=(
+            r"a Maxwellian at the reduced mass $\mu$ (the electron mass for electron impact); plasmacoll's `RateTable.from_cross_section`",
+            r"`incident_mass` only for a cross section tabulated in the lab frame",
+        ),
+    )
     def from_cross_section(
         cls,
         reactants: Sequence[str],
@@ -144,7 +186,7 @@ class Reaction:
 
         ``reduced_mass`` (kg) is the electron mass for electron impact;
         ``incident_mass`` is needed for a table in the lab frame (see
-        :func:`plasmacoll.rate_coefficient`).
+        `plasmacoll.rate_coefficient`).
         """
         table = RateTable.from_cross_section(
             cross_section, reduced_mass, incident_mass=incident_mass
@@ -161,6 +203,14 @@ class Reaction:
         )
 
     @classmethod
+    @method(
+        equations={
+            "reduced_mass": r"\mu = \frac{m_i m_t}{m_i + m_t} \quad (\mu = m_i \text{ without a target mass})",
+            "loss": r"\varepsilon_e = \begin{cases} 0 \ (\text{the } 3 m_e/M \text{ transfer}) & \text{elastic, } m_i < 10\,m_e \\ \text{the process's loss} & \text{otherwise} \end{cases}",
+        },
+        assumptions=(r"an elastic electron process needs `target_mass`",),
+        components=(from_cross_section,),
+    )
     def from_process(
         cls,
         process: CollisionProcess,

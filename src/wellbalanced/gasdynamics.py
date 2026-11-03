@@ -5,7 +5,7 @@ electronvolts of energy (the *sputter wind*), the ions that hit the target come 
 neutrals, and the plasma ionizes the gas and drags it along. Together these rarefy the
 argon in front of the racetrack, which decides the spoke mode number, the merging of
 spokes and the homogeneous regime (Hecimovic and von Keudell, *J. Phys. D* 51, 453001,
-2018). :class:`GasDynamics` is the neutral-gas side of that: a two-species gas (argon
+2018). `GasDynamics` is the neutral-gas side of that: a two-species gas (argon
 and the sputtered metal) with one velocity and one temperature, in one dimension
 (axial, ``x`` from the target) or two (``y`` azimuthal, periodic).
 
@@ -42,29 +42,29 @@ kinetic (DSMC) check of any result is due.
   ``metal_sticking``) and the *heat exchange* with a wall of the temperature
   ``temperature``: the free-molecular energy flux ``alpha (n v / 4) 2k (T - T_w)`` with
   the accommodation coefficient ``alpha``.
-- *Volume sources* (:class:`VolumeSource`: atoms created at a temperature and a velocity),
+- *Volume sources* (`VolumeSource`: atoms created at a temperature and a velocity),
   *sinks* (``model.sinks[species]``, atoms removed per m^3 and s, or
   ``model.sink_frequencies[species]``, a loss frequency in 1/s, e.g. the ionization of
-  the gas ``n_e k_iz``: the atoms leave with their own velocity and thermal energy) and *exchange with the plasma ions* (:class:`IonExchange`: momentum
+  the gas ``n_e k_iz``: the atoms leave with their own velocity and thermal energy) and *exchange with the plasma ions* (`IonExchange`: momentum
   ``rho nu (u_i - u)`` and the frictional and thermal heating). Arrays of the grid's
   shape, or numbers, and they may be changed between steps: the interface to a plasma
   model that evaluates them from its own state.
-- *Cooling by unresolved walls* (:class:`ThermalRelaxation`): a loss frequency of the heat.
+- *Cooling by unresolved walls* (`ThermalRelaxation`): a loss frequency of the heat.
   The energy of the sputtered atoms (several eV per atom, against 0.04 eV for the gas) is
   the largest heat source of the gas of a magnetron, and without a way to leave it the
   gas heats until it blows out of the domain.
 
-**Boundaries**, per end (``"left"``, ``"right"``): :meth:`Boundary.wall` (reflecting, with
-the sources above), :meth:`Boundary.inflow` (a reservoir of the fill gas at a pressure and
-temperature, free of metal: the refill), :meth:`Boundary.outflow` (zero gradient) and
-:meth:`Boundary.periodic`. The azimuthal direction is periodic.
+**Boundaries**, per end (``"left"``, ``"right"``): `Boundary.wall` (reflecting, with
+the sources above), `Boundary.inflow` (a reservoir of the fill gas at a pressure and
+temperature, free of metal: the refill), `Boundary.outflow` (zero gradient) and
+`Boundary.periodic`. The azimuthal direction is periodic.
 
 **Numerics.** Finite volumes, MUSCL reconstruction of the primitive variables with a
 slope limiter, the HLLC flux (the metal and the gas are carried as passive fractions of
 it), SSP-RK3. The diffusion and the heat conduction are applied after each step by
 backward Euler (tridiagonal, one dimension after the other), conservative, so the step is
 limited by the acoustic CFL only. The sum of every conserved quantity changes only by what
-the boundaries and the sources bring in, to rounding: :attr:`GasDynamics.budget` records
+the boundaries and the sources bring in, to rounding: `GasDynamics.budget` records
 those, which the tests use.
 
 **Data.** Every number that describes a material (the mean energy of the sputtered
@@ -72,7 +72,7 @@ atoms, the diffusion coefficient, the accommodation, the sticking coefficient) i
 and the defaults below are **PLACEHOLDERS** of the right order, to be replaced by data:
 the energy distribution of the sputtered atoms from SRIM or the Thompson distribution with
 the binding energy of the target (the mean is several eV, with a tail to the incident
-energy), the diffusion coefficient from :func:`binary_diffusion` with measured collision
+energy), the diffusion coefficient from `binary_diffusion` with measured collision
 diameters or a collision integral, the accommodation of argon on a metal surface from
 molecular-beam data.
 
@@ -87,6 +87,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import xarray as xr
+from methodcard import ConvergenceProblem, Rule, method
 from plasmacoll.constants import ATOMIC_MASS, BOLTZMANN, ELEMENTARY_CHARGE
 from scope_profiler import profile, region
 
@@ -108,13 +109,49 @@ __all__ = [
 ARGON_MASS = 39.948 * ATOMIC_MASS
 #: Floor of a density (kg/m^3), so that an empty metal species stays finite.
 DENSITY_FLOOR = 1.0e-300
-#: The names of the conserved quantities of :attr:`GasDynamics.budget`.
+#: The names of the conserved quantities of `GasDynamics.budget`.
 QUANTITIES = ("gas", "metal", "momentum_x", "momentum_y", "energy")
 
 _SIDES = ("left", "right")
 _KINDS = ("wall", "inflow", "outflow", "periodic")
 
 
+def _diffusion_rules() -> dict:
+    """The SymPy rule of `binary_diffusion` (for the tests)."""
+    import sympy
+
+    ma, mb, d, t, p = sympy.symbols(
+        "mass_a mass_b diameter temperature pressure", positive=True
+    )
+    k = sympy.Float(BOLTZMANN)
+    reduced = ma * mb / (ma + mb)
+    rule = (
+        3
+        / (16 * (p / (k * t)) * sympy.pi * d**2)
+        * sympy.sqrt(2 * sympy.pi * k * t / reduced)
+    )
+    ranges = {
+        "mass_a": (6.6e-26, 8.0e-26),
+        "mass_b": (4.0e-26, 3.3e-25),
+        "diameter": (3.0e-10, 4.0e-10),
+        "temperature": (300.0, 1000.0),
+        "pressure": (0.1, 10.0),
+    }
+    return {"diffusion": Rule(rule, ranges=ranges, rtol=1e-12)}
+
+
+@method(
+    equations={
+        "diffusion": r"D = \frac{3}{16\, n\, \pi d^2}\sqrt{\frac{2\pi k T}{\mu}}, \qquad n = \frac{p}{kT}, \qquad \mu = \frac{m_a m_b}{m_a + m_b}",
+    },
+    assumptions=(
+        r"hard spheres, the first Chapman–Cowling approximation; $d$ the mean of the two diameters; good to tens of percent",
+    ),
+    references=(
+        "Chapman and Cowling, The Mathematical Theory of Non-Uniform Gases (hard spheres, first approximation)",
+    ),
+    symbolic=_diffusion_rules,
+)
 def binary_diffusion(
     mass_a: float,
     mass_b: float,
@@ -150,7 +187,7 @@ def binary_diffusion(
 class Boundary:
     """The condition at one end of the axial direction.
 
-    Use the constructors: :meth:`wall`, :meth:`inflow`, :meth:`outflow`, :meth:`periodic`.
+    Use the constructors: `wall`, `inflow`, `outflow`, `periodic`.
     The fields may be changed between steps (the flux of a wall follows the discharge
     current of the plasma model); fluxes are numbers or arrays along ``y``.
 
@@ -465,7 +502,7 @@ def _cyclic_thomas(
 ) -> np.ndarray:
     """Solve cyclic tridiagonal systems along axis 0 (Sherman-Morrison).
 
-    As :func:`_thomas`, with the corners ``lower[0]`` coupling row 0 to ``x[-1]`` and
+    As `_thomas`, with the corners ``lower[0]`` coupling row 0 to ``x[-1]`` and
     ``upper[-1]`` coupling row ``n - 1`` to ``x[0]``.
     """
     n = diag.shape[0]
@@ -536,6 +573,51 @@ def _diffuse_axis(
     return new, flux
 
 
+def _wave_problem() -> ConvergenceProblem:
+    """A smooth density wave advected half round a periodic box, unlimited MUSCL."""
+
+    def error(h: float) -> float:
+        model = GasDynamics(
+            1.0,
+            round(1.0 / h),
+            gas_mass=1.0,
+            metal_mass=1.0,
+            limiter="none",
+            boundaries={"left": Boundary.periodic(), "right": Boundary.periodic()},
+        )
+        model.set_state(
+            1.0 + 0.2 * np.sin(2.0 * np.pi * model.x), 0.0, u=1.0, pressure=1.0
+        )
+        model.run(0.5)
+        exact = 1.0 + 0.2 * np.sin(2.0 * np.pi * (model.x - 0.5))
+        return float(np.mean(np.abs(model.state().gas_density[:, 0] - exact)))
+
+    return ConvergenceProblem(error, steps=[1 / 16, 1 / 32, 1 / 64])
+
+
+@method(
+    equations={
+        "species": r"\partial_t\rho_{g,m} + \nabla\cdot(\rho_{g,m}\mathbf u) = \mp\nabla\cdot\mathbf J_m + S_{g,m}, \qquad \mathbf J_m = -\rho D\nabla Y, \qquad Y = \frac{\rho_m}{\rho}",
+        "momentum": r"\partial_t(\rho\mathbf u) + \nabla\cdot(\rho\mathbf u\mathbf u + p) = \mathbf S_u",
+        "energy": r"\partial_t E + \nabla\cdot\big((E + p)\mathbf u\big) = -\nabla\cdot\big(\mathbf J_m(h_m - h_g)\big) + \nabla\cdot(\kappa\nabla T) + S_E, \qquad h_s = \frac{\gamma k T}{(\gamma - 1) m_s}",
+        "state": r"p = n k T, \qquad n = \frac{\rho_g}{m_g} + \frac{\rho_m}{m_m}, \qquad E = \frac{p}{\gamma - 1} + \tfrac12\rho|\mathbf u|^2, \qquad \gamma = \tfrac53",
+        "wall": r"\text{emitted at } T_s:\ \Phi m,\ \ \Phi m\sqrt{\frac{\pi k T_s}{2m}},\ \ 2kT_s\Phi; \qquad \text{sticking } s\,\frac{n_m\bar v}{4}; \qquad \text{heat } \alpha\,\frac{n\bar v}{4}\, 2k(T - T_w)",
+        "ion_exchange": r"\mathbf S_u = \rho_s\nu(\mathbf u_i - \mathbf u), \qquad S_E = \mathbf u\cdot\mathbf S_u + \tfrac12\rho_s\nu|\mathbf u_i - \mathbf u|^2 + \tfrac32 n_s k\nu(T_i - T)",
+    },
+    order=2,
+    assumptions=(
+        r"argon and sputtered metal as one compressible gas with one velocity and temperature, in 1D or 2D ($y$ periodic); no viscosity",
+        r"MUSCL on the primitives (van Leer by default; minmod, MC, none), HLLC with the species as passive fractions, SSP-RK3 at CFL 0.4",
+        r"diffusion and conduction after each step by backward Euler, tridiagonal axis by axis; sputtered atoms at $T_s = E_m/2k$",
+        r"the continuum limit at Knudsen numbers 0.1–1; the order is that of a smooth wave with the unlimited reconstruction",
+    ),
+    references=(
+        "Hecimovic and von Keudell, J. Phys. D 51, 453001 (2018)",
+        "Toro, Riemann Solvers and Numerical Methods for Fluid Dynamics (HLLC; not cited by the code)",
+    ),
+    components=(binary_diffusion,),
+    problem=_wave_problem,
+)
 class GasDynamics:
     """Two-species compressible gas in 1D or 2D; see the module docstring.
 
@@ -549,7 +631,7 @@ class GasDynamics:
         gamma: The adiabatic index (5/3: monatomic).
         diffusion: The binary diffusion coefficient ``D`` in m^2/s: a number or a function
             of the temperature (K) and the pressure (Pa) arrays (see
-            :func:`binary_diffusion`). ``None``: no diffusion.
+            `binary_diffusion`). ``None``: no diffusion.
         thermal_conductivity: ``kappa`` in W/(m K) (number or function of ``T``); 0: none.
         boundaries: The conditions at ``"left"`` and ``"right"`` (default: a wall at the
             left, an outflow at the right).
@@ -577,7 +659,7 @@ class GasDynamics:
         cfl: float = 0.4,
         source_cfl: float = 0.2,
     ) -> None:
-        """Set up the grid and the closures; the gas is empty until :meth:`set_state`."""
+        """Set up the grid and the closures; the gas is empty until `set_state`."""
         if length <= 0.0 or width <= 0.0 or cells < 2 or cells_y < 1:
             raise ValueError("a positive domain, at least 2 cells along x")
         if limiter not in LIMITERS:
@@ -617,7 +699,7 @@ class GasDynamics:
         self.time = 0.0
         self.steps = 0
         #: The conserved quantities that boundaries and sources have brought in (the
-        #: same units as :meth:`totals`).
+        #: same units as `totals`).
         self.budget = dict.fromkeys(QUANTITIES, 0.0)
         self._u = np.zeros((5, cells, cells_y))
         self._ready = False
@@ -694,7 +776,7 @@ class GasDynamics:
             raise RuntimeError("set the state first (set_state or set_uniform)")
 
     def state(self) -> GasState:
-        """The current gas as a :class:`GasState`."""
+        """The current gas as a `GasState`."""
         self._check_ready()
         prim = self._primitive(self._u)
         return GasState(

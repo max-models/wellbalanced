@@ -11,13 +11,13 @@ identity for its ``y``-averaged flux across ``B``, ``Gamma_x = <n u_x>``::
 (``<n E_y> = <dn dE_y>`` since ``<E_y> = 0``): the fluctuation-driven ``E x B`` flux,
 the collisional (Pedersen) flux, the inertia and the divergence of the full second
 moment, which is the pressure tensor over the mass plus the convective ``n u_x u_y``.
-:func:`momentum_budget` evaluates every term from the moments a PIC run deposits
+`momentum_budget` evaluates every term from the moments a PIC run deposits
 (picnic's ``MomentRecorder``) and returns them as fluxes on ``(t, x)``, with the
 residual of the identity, so that the budget is checked rather than assumed, and the
 ``E x B`` term split into a spoke band and the rest (an exact Parseval split of the
-correlator). :func:`loop_identity` checks ``<n E_y> = <phi d_y n>``, the identity
+correlator). `loop_identity` checks ``<n E_y> = <phi d_y n>``, the identity
 behind the spoke-front picture of the transport (the flux as the correlation of the
-potential with the azimuthal density gradient), and :func:`mode_fluxes` resolves the
+potential with the azimuthal density gradient), and `mode_fluxes` resolves the
 ``E x B`` flux by azimuthal mode with the phase between density and potential.
 
 Input: a dataset with dims ``t``, ``x``, ``y`` (``y`` periodic, uniform) holding
@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import numpy as np
 import xarray as xr
+from methodcard import method
 from plasmacoll.constants import ELECTRON_MASS, ELEMENTARY_CHARGE
 
 __all__ = ["loop_identity", "mode_fluxes", "momentum_budget"]
@@ -98,6 +99,17 @@ def _correlation(
     )
 
 
+@method(
+    equations={
+        "identity": r"q B_z\langle n u_x\rangle = q\langle n E_y\rangle - m\nu\langle n u_y\rangle - m\,\partial_t\langle n u_y\rangle - m\,\partial_x\langle n v_x v_y\rangle",
+        "exb": r"\langle n E_y\rangle = \langle\delta n\,\delta E_y\rangle = \sum_m \text{its Fourier modes (spoke band and rest)}",
+        "hall": r"\Omega_\mathrm{eff} = \frac{|\langle n u_y\rangle|}{|\langle n u_x\rangle|}",
+    },
+    assumptions=(
+        r"$y$ periodic and uniform, $\langle\cdot\rangle$ the $y$ average; the residual is checked, not assumed (deposit and leapfrog stagger)",
+        r"a diagnostic of PIC moments, not a model",
+    ),
+)
 def momentum_budget(
     ds: xr.Dataset,
     *,
@@ -168,6 +180,12 @@ def momentum_budget(
     return out.transpose("t", "x", ...) if "t" in out.dims else out
 
 
+@method(
+    equations={
+        "identity": r"\langle n E_y\rangle = \langle\phi\,\partial_y n\rangle \quad (E_y = -\partial_y\phi, \text{ periodic } y)",
+    },
+    assumptions=(r"integration by parts over the periodic $y$",),
+)
 def loop_identity(
     ds: xr.Dataset, *, species: str | None = None, derivative: str = "centred"
 ) -> xr.Dataset:
@@ -217,7 +235,7 @@ def mode_fluxes(
     """The ``E x B`` flux by azimuthal mode and the phase between density and potential.
 
     ``exb_mode`` (``m = 1 .. modes``, m^-2 s^-1 on ``(t, x, m)``) sums to the ``E x B``
-    term of :func:`momentum_budget` without ``m = 0``; ``phase`` is ``arg(phi_m n_m*)``
+    term of `momentum_budget` without ``m = 0``; ``phase`` is ``arg(phi_m n_m*)``
     (rad), the angle by which the potential pattern is shifted against the density
     pattern (``n ~ cos(k y)``, ``phi ~ cos(k y + phase)``: the potential maximum sits
     ``phase / k`` before the density maximum along ``y``), which sets the sign and size

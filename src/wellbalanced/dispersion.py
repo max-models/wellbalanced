@@ -81,7 +81,7 @@ def _dispersion_function_rules() -> dict:
     return {
         "real_axis": Rule(
             rule,
-            implementation=lambda zeta: plasma_dispersion_function(zeta).real,
+            implementation=lambda zeta: np.real(plasma_dispersion_function(zeta)),
             ranges={"zeta": (-4.0, 4.0)},
         )
     }

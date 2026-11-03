@@ -189,7 +189,8 @@ def _curl_curl_problem() -> ConvergenceProblem:
     def error(h: float) -> dict[str, float]:
         edges = np.linspace(0.0, 1.0, round(1.0 / h) + 1)
         errors = {}
-        for name, geometry in (("cut", "cartesian"), ("rz", "cylindrical")):
+        for name in ("cut", "rz"):
+            geometry = "cartesian" if name == "cut" else "cylindrical"
             grid = CellGrid(edges, edges, geometry=geometry)
             x, y = grid.xx, grid.yy
             if name == "cut":

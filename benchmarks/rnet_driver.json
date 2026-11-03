@@ -1,0 +1,75 @@
+{
+ "results": [
+  {
+   "variant": "bug",
+   "h": 0.004,
+   "r_net": 0.2664038792549869,
+   "resistances": {
+    "coil": 0.07089950205981722,
+    "shield": 0.1955043360682568
+   },
+   "inductance": 4.11169189604374e-06,
+   "power_balance": -1.5437805556128836e-07,
+   "unknowns": 1116650,
+   "iterations": 758,
+   "setup_seconds": 443.21280483300507,
+   "seconds": 382.2669253750064,
+   "tolerance": 0.0001,
+   "driver": {
+    "plasma_radius": 0.1185,
+    "length": 0.17,
+    "shield_wall": 0.008,
+    "slits": 24,
+    "slit_width": 0.002,
+    "slit_margin": 0.01,
+    "coil_radius": 0.1385,
+    "turns": 6,
+    "pitch": 0.02,
+    "wire_radius": 0.004,
+    "lead_radius": 0.155,
+    "lead_side": 0.01,
+    "feed_gap": 0.01,
+    "ems_distance": null,
+    "ems_wall": 0.008,
+    "box_half": 0.17,
+    "box_end": 0.22,
+    "frequency": 1000000.0
+   }
+  },
+  {
+   "variant": "coil",
+   "h": 0.004,
+   "r_net": 0.07035406989410348,
+   "resistances": {
+    "coil": 0.07035458043107835
+   },
+   "inductance": 6.841778988157454e-06,
+   "power_balance": 7.256680041978214e-06,
+   "unknowns": 1152314,
+   "iterations": 638,
+   "setup_seconds": 0.4532764999894425,
+   "seconds": 687.7985254580126,
+   "tolerance": 1e-05,
+   "driver": {
+    "plasma_radius": 0.1185,
+    "length": 0.17,
+    "shield_wall": 0.008,
+    "slits": 24,
+    "slit_width": 0.002,
+    "slit_margin": 0.01,
+    "coil_radius": 0.1385,
+    "turns": 6,
+    "pitch": 0.02,
+    "wire_radius": 0.004,
+    "lead_radius": 0.155,
+    "lead_side": 0.01,
+    "feed_gap": 0.01,
+    "ems_distance": null,
+    "ems_wall": 0.008,
+    "box_half": 0.17,
+    "box_end": 0.22,
+    "frequency": 1000000.0
+   }
+  }
+ ]
+}

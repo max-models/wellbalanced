@@ -243,6 +243,62 @@ Loss against NGSolve's surface impedance on fitted meshes, `tube3d` of
 - On a quiet machine the iterative solve takes 25–50 iterations and 3–11 s for
   2·10^5 to 5·10^5 unknowns (two threads).
 
+## Coils of real wire: the feed
+
+A coil of copper tube is an `ImpedanceConductor3D` driven by a `Feed3D`: the coil current
+flows along grid edges across a gap between its terminals (a delta-gap source), from inside
+the metal of one terminal to inside the other, and returns on the metal's surface. The
+impedance at the terminals then includes the coil's own Joule loss and its proximity
+effect. The terminals must lie in one connected piece of metal on the grid (the nodes
+joined by edges that are not unknowns), which needs about two cells across the wire;
+otherwise the feed is refused. The current's gradient part (the charge at the terminals)
+returns through the metal, so the source is compatible with the gauge (the result changes
+by below `1e-4` between `eps = 1e-4` and `1e-6`).
+
+**The coax (tests).** A coaxial line of copper, a = 4 mm and b = 12 mm, shorted by the
+box's wall and fed across a 2 mm gap, against `Z' = i omega mu0 / (2 pi) ln(b / a) + Z_s /
+(2 pi) (1 / a + 1 / b)` (the second term is the skin's resistance and as much internal
+reactance), from two lengths:
+
+| h | 2 mm | 1 mm | 0.67 mm | 0.5 mm |
+| --- | --- | --- | --- | --- |
+| reactance X' | +0.96 % | +0.13 % | +0.10 % | +0.04 % |
+| resistance R' | −2.6 % | −3.9 % | −0.5 % | −1.7 % |
+
+The reactance converges; the resistance is within a few per cent and not monotone: the
+surface loss takes each cut face's mean `H`, which varies as `1 / r` across a cell next to
+the wire (first order in `h / a`). A ring of wire (R / a = 5) gives the thin-ring
+inductance to 1 % (the box) and a resistance 18 % above `R_s R / a`, the ring's own
+proximity effect.
+
+**The iterative solver** converges more slowly with a feed (60 iterations at 2 mm and 150
+at 1 mm for the coax, 600–800 for the driver below, against 25–50 for a current sheet), but
+the slow part of the residual is the gauge's: at a residual of `1e-4` the coax's
+resistance is within `2e-7` of the direct solve.
+
+## R_net of the BUG driver
+
+`benchmarks/rnet_driver.py`: the six-turn coil (radius 0.1385 m, pitch 2 cm, an 8 mm
+copper tube, simgeometry's `Helix`) with radial leads and a return bar fed across a 1 cm
+gap; the Faraday shield (inner radius 0.1185 m, 0.17 m long, 24 axial slits 2 mm wide
+ending 1 cm before its ends, `tube - PolarRepeat(slit, 24)`) on the back plate; a
+perfectly conducting housing 3 cm outside the coil and 5 cm beyond the driver's open end;
+copper at 1 MHz. The pitch, the tube's size, the number and width of the slits and the
+housing are assumptions, not IPP's drawings. The shield's wall is 8 mm, thicker than a
+real one, because a wall below about two cells lets the field through (an edge reaches
+across it).
+
+| h | unknowns | coil | shield | R_net | L | iterations | cut cells + solve |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 4 mm | 1.12 M | 0.071 Ω | 0.196 Ω | 0.266 Ω | 4.11 µH | 758 | 443 + 382 s |
+
+The coil alone (no shield) is 0.070 Ω. The split, 27 % in the coil and 73 % in the
+shield, is the measured one (25 % and 75 %, Zielke et al. 2021), and R_net is 44 % of the
+measured 0.6 Ω, which also has the matching network and the lines. 4 mm is the coarsest
+grid on which the 8 mm tube is one piece of metal. The converged value needs the real
+shield (about 2 mm thick, so h ≲ 1 mm there) and a resolved wire (h ≲ a / 4): about 10^8
+edges on a uniform grid, a production run on mpiarray and cunumpy, or local refinement.
+
 ## What it costs
 
 - **Yee grid, direct:** the direct solve takes 40–60 s for 65 000 unknowns (24 × 24 × 40
@@ -318,4 +374,10 @@ need multipatch domains there.
   so they cannot refine the 3D field.
 - The iterative solver on mpiarray and cunumpy (it is all sparse products and a
   multigrid on a Cartesian grid).
-- The helical coil, the Faraday shield of BUG and ELISE, and R_net.
+- Done in the third round: coils of real wire (`Feed3D`), the helical coil and the
+  slotted Faraday shield (simgeometry's `Helix` and `PolarRepeat`), and R_net of BUG on
+  reduced grids.
+- The converged R_net (the real shield's thickness, a resolved wire), and ELISE's with the
+  EMS and its supports: production runs.
+- The resistance's first-order error where `H` varies across a cut face (a wire): an
+  extrapolation of `H` to the surface in the loss.

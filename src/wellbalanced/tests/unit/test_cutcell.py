@@ -184,3 +184,72 @@ def test_volume_conductors_must_not_touch_impedance_conductors():
         )
     with pytest.raises(ValueError, match="min_air_fraction"):
         InductiveField3D(grid, frequency=1e3, min_air_fraction=0.0)
+
+
+# The slotted cylinder of benchmarks/slotted_cylinder_case.py (step R4's test) at 500 kHz
+# (skin depth 0.71 mm in the 6 mm wall), against NGSolve with the same surface impedance
+# on curved meshes fitted to the tube and its 4 mm slits, finest mesh and order
+# (benchmarks/slotted_cylinder_ngsolve_sibc.py): the losses at 1 A.
+NGSOLVE_2D = {"none": 0.5820426537591570, "through": 0.6682538180678069}  # W/m
+NGSOLVE_3D = {  # W, one eighth
+    "none": 0.00923019992605531,
+    "closed": 0.013396949945715761,
+    "through": 0.008593391259681745,
+}
+
+
+def slotted_tube(slits, half_length):
+    """The 30/36 mm tube with four axial 4 mm slits, closed 10 mm before its ends."""
+    shape = Tube((0, 0, -half_length), (0, 0, half_length), 0.030, 0.036)
+    if slits == "none":
+        return shape
+    reach = 4 * half_length if slits == "through" else 0.040
+    return (
+        shape
+        - Cuboid((0, 0, 0), (1.0, 0.004, 2 * reach))
+        - Cuboid((0, 0, 0), (0.004, 1.0, 2 * reach))
+    )
+
+
+@pytest.mark.parametrize("slits", ["none", "through"])
+def test_slotted_tube_loss_matches_ngsolve_in_2d(slits):
+    """z-invariant: cut cells to 0.1 % at h = 2.5 mm (slits 1.6 cells), staircase 20 % off."""
+    shapes = [slotted_tube(slits, 1.0)]
+    _, cut, scale = quarter(24, shapes, 5e5)
+    _, stair, _ = quarter(24, shapes, 5e5, cut_cells=False)
+    assert scale * cut.loss == pytest.approx(NGSOLVE_2D[slits], rel=1e-3)
+    assert scale * stair.loss / NGSOLVE_2D[slits] - 1 > 0.15
+
+
+def test_slotted_tube_losses_match_ngsolve_in_3d():
+    """The finite tube, one eighth, h = 2.5 mm: within 6 %, and the slits' effect.
+
+    The remainder is at the 3D corners (the tube's and the slits' ends), first order;
+    closed slits, as in a Faraday shield, raise the loss by 45 % (NGSolve) and the cut
+    cells give 36 %.
+    """
+    h = 0.0025
+    grid = EdgeGrid(
+        (0, 0, 0),
+        (BOX, BOX, 0.1),
+        (24, 24, 40),
+        ("dirichlet", "dirichlet", ("natural", "dirichlet")),
+    )
+    coil = Coil3D(Cuboid((0, 0, 0), (2 * COIL, 2 * COIL, 0.16)), (0, 0, 1), TURNS)
+    losses = {}
+    for slits in NGSOLVE_3D:
+        model = InductiveField3D(
+            grid,
+            frequency=5e5,
+            coils=[coil],
+            impedance_conductors=[
+                ImpedanceConductor3D([slotted_tube(slits, 0.05)], SIGMA, "tube")
+            ],
+        )
+        solution = model.solve(1.0, solver="iterative")
+        losses[slits] = solution.loss
+        assert solution.loss == pytest.approx(NGSOLVE_3D[slits], rel=0.06), slits
+        assert h == grid.spacing[0]
+    effect = losses["closed"] / losses["none"]
+    assert effect == pytest.approx(NGSOLVE_3D["closed"] / NGSOLVE_3D["none"], rel=0.08)
+    assert losses["through"] < losses["none"] < losses["closed"]

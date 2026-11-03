@@ -44,6 +44,7 @@ from wellbalanced.spatial.inductive import (
 from wellbalanced.spatial.inductive3d import (
     Coil3D,
     Conductor3D,
+    Feed3D,
     ImpedanceConductor3D,
     InductiveField3D,
     InductiveSolution3D,
@@ -72,6 +73,7 @@ __all__ = [
     "CoupledState",
     "DriverCoupling",
     "EdgeGrid",
+    "Feed3D",
     "ImpedanceConductor3D",
     "Fluid2D",
     "Fluid2DState",

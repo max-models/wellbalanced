@@ -7,6 +7,19 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `Feed3D`: coils of real wire in the 3D field. The coil current flows along grid edges
+  across a gap between the terminals of an `ImpedanceConductor3D` (a delta-gap source) and
+  returns on its surface, so the impedance includes the coil's own loss and proximity
+  effect; terminals not joined through one piece of metal are refused. Tested on a coaxial
+  line against its closed form (reactance to 0.13 %, resistance to 4 % at a / h = 4) and on
+  a ring of wire.
+- The slotted-cylinder test of step R4 as unit tests (`test_cutcell.py`): the z-invariant
+  slotted tube against NGSolve to 0.1 % with cut cells (staircase 20 % off), the finite tube
+  with closed and through slits to 6 %.
+- `benchmarks/rnet_driver.py`: R_net of the BUG driver (helical coil, Faraday shield with
+  24 slits, optional EMS with supports) on reduced grids, with the cut cells cached.
+- `InductiveField3D(cut_cell_samples=...)`: the sampling of the cut cells' crossings.
+
 - Method cards (methodcard) on the equations of the models: the reactions, the global model
   (cusps, wall areas, gas temperature, the steady state), the OpenCR rates, the neutralizer
   (beam, Knudsen profile, pumping, fractions, sources, fixed point), the 0D RF driver
@@ -264,6 +277,9 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The auxiliary-space preconditioner's coarsest multigrid level could be exactly singular
+  (two coarse nodes reaching one fine node through a gap in a conductor); a relative
+  diagonal shift of 1e-10 keeps it regular.
 - The docstrings' `:func:`, `:class:` and `:meth:` roles are code spans, which the API pages
   render.
 

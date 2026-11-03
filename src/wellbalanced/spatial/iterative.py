@@ -107,9 +107,13 @@ class _Multigrid:
             lattice, active = coarse_lattice, coarse_active
         self.levels.append((matrix, 1.0 / diagonal, None))
         # unknowns no edge reaches (e.g. a component of the nodal field none of a
-        # node's edges is along) have empty rows: a unit diagonal keeps them at zero
+        # node's edges is along) have empty rows: a unit diagonal keeps them at zero;
+        # a coarse node whose active fine nodes are those of another (two coarse nodes
+        # reaching one fine node through a gap in a conductor) makes the Galerkin
+        # operator singular: a relative shift of 1e-10 on the diagonal keeps it regular
         empty = np.asarray(abs(matrix).sum(axis=1)).ravel() == 0
-        self.coarse = spla.splu(sp.csc_matrix(matrix + sp.diags(empty.astype(float))))
+        shift = 1e-10 * np.abs(matrix.diagonal()) + empty
+        self.coarse = spla.splu(sp.csc_matrix(matrix + sp.diags(shift)))
 
     def _cycle(self, level: int, rhs: np.ndarray) -> np.ndarray:
         matrix, inverse, prolongation = self.levels[level]

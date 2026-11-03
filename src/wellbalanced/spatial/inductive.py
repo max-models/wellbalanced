@@ -80,6 +80,7 @@ import scipy.sparse.linalg as spla
 import xarray as xr
 from methodcard import ConvergenceProblem, Rule, method
 from plasmacoll.constants import ELECTRON_MASS, ELEMENTARY_CHARGE
+from plasmacoll.units import to_array, to_unit
 from scipy.constants import mu_0 as MU_0
 
 from wellbalanced.datasets import variable
@@ -430,6 +431,9 @@ class InductiveField2D:
         grid: A grid instead of the edges, e.g. a
             `wellbalanced.spatial.patches.PatchGrid` (its geometry and
             boundaries are the model's).
+
+    The physical settings take astropy Quantities, strings such as ``"1 MHz"`` or
+    numbers in the units given (the cell fields also arrays or functions in them).
     """
 
     # --- regions -----------------------------------------------------------------
@@ -523,6 +527,15 @@ class InductiveField2D:
         grid: CellGrid | PatchGrid | None = None,
     ) -> None:
         """Mark the regions on the grid and assemble the field operator."""
+        frequency = to_unit(frequency, "Hz", "frequency")
+        electron_density = to_array(electron_density, "m^-3", "electron_density")
+        collision_frequency = to_array(
+            collision_frequency, "1/s", "collision_frequency"
+        )
+        electron_temperature = to_array(
+            electron_temperature, "eV", "electron_temperature"
+        )
+        electron_viscosity = to_array(electron_viscosity, "Pa s", "electron_viscosity")
         if frequency <= 0.0:
             raise ValueError("frequency must be positive")
         if electron_drift is not None:
@@ -832,7 +845,8 @@ class InductiveTimeStepper:
     """
 
     def __init__(self, field_model: InductiveField2D, dt: float) -> None:
-        """Factorize the step's operator."""
+        """Factorize the step's operator; ``dt`` [s] also as a Quantity or a string."""
+        dt = to_unit(dt, "s", "dt")
         if dt <= 0.0:
             raise ValueError("dt must be positive")
         self.model = field_model

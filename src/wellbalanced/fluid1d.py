@@ -63,6 +63,7 @@ import scipy.sparse.linalg as spla
 import xarray as xr
 from methodcard import ConvergenceProblem, Rule, method
 from plasmacoll.constants import ELEMENTARY_CHARGE
+from plasmacoll.units import convert_units, to_array, to_unit, unit_field
 from scope_profiler import profile
 
 from wellbalanced._profiling import _PROFILE_TAGS
@@ -229,15 +230,19 @@ class FluidSpecies:
             Einstein relation ``D = mu T`` (``T_e`` for electrons, ``T_g`` for ions).
         momentum: Solve the momentum equation of this ion species (with the
             friction ``e / (M mu)`` of its mobility) instead of drift-diffusion.
+
+    The coefficients take astropy Quantities or strings such as
+    ``"100 cm2 / (V s)"`` too.
     """
 
     species: Species
-    mobility: float = 0.0
-    diffusion: float | None = None
+    mobility: float = unit_field("m^2 / (V s)", 0.0)
+    diffusion: float | None = unit_field("m^2 / s", None)
     momentum: bool = False
 
     def __post_init__(self) -> None:
         """Validate the transport coefficients."""
+        convert_units(self)
         if self.mobility < 0.0 or (self.diffusion is not None and self.diffusion < 0):
             raise ValueError(
                 f"{self.species.name}: mobility and diffusion must be >= 0"
@@ -288,14 +293,22 @@ class Boundary:
     prescribed electron density; ``reflection`` the wall's reflection
     coefficient; ``thermal_share`` the share of ``v_th n`` a wall takes;
     ``energy_factor`` the mean energy an electron takes through an outflow, in ``T_e``.
+    ``value`` and ``temperature`` take astropy Quantities or strings such as
+    ``"1e16 cm^-3"`` or ``"3 eV"`` too.
     """
 
     kind: str
     value: float = 0.0
-    temperature: float | None = None
+    temperature: float | None = unit_field("eV", None)
     reflection: float = 0.0
     thermal_share: float = 0.5
     energy_factor: float = 2.0
+
+    def __post_init__(self) -> None:
+        """Convert the value to the unit of its kind and the temperature to eV."""
+        convert_units(self)
+        unit = {"density": "m^-3", "flux": "m^-2 s^-1", "outflow": "m / s"}
+        self.value = to_unit(self.value, unit.get(self.kind, ""), "value")
 
     @classmethod
     def wall(cls, reflection: float = 0.0, thermal_share: float = 0.5) -> Boundary:
@@ -348,10 +361,18 @@ class Boundary:
 
 @dataclass
 class PotentialBoundary:
-    """The potential at one end: a value (V) or the field ``E`` (V/m) there."""
+    """The potential at one end: a value (V) or the field ``E`` (V/m) there.
+
+    ``value`` takes an astropy Quantity or a string such as ``"10 V"`` too.
+    """
 
     kind: str
     value: float = 0.0
+
+    def __post_init__(self) -> None:
+        """Convert the value to the unit of its kind."""
+        unit = {"potential": "V", "field": "V / m"}
+        self.value = to_unit(self.value, unit.get(self.kind, ""), "value")
 
     @classmethod
     def potential(cls, value: float) -> PotentialBoundary:
@@ -538,15 +559,19 @@ class Fluid1D:
             (`wellbalanced.neutralizer.Neutralizer.beam_sources`): rates per
             unit density of fluid or fixed species, numbers or arrays on the
             cells, with the energy they give the electrons.
+
+    The physical settings take astropy Quantities or strings such as
+    ``"5 cm"``, ``"300 K"`` or ``"1e21 m^-3"`` too, converted to the units
+    above (arrays on the cells stay arrays).
     """
 
     species: Sequence[FluidSpecies]
     reactions: Sequence[Reaction]
-    length: float
+    length: float = field(metadata={"unit": "m"})
     cells: int
     fixed: Mapping[str, float | np.ndarray] = field(default_factory=dict)
-    gas_temperature: float = 0.025
-    electron_temperature: float | None = None
+    gas_temperature: float = unit_field("eV", 0.025)
+    electron_temperature: float | None = unit_field("eV", None)
     boundaries: dict[str, dict[str, Boundary]] = field(default_factory=dict)
     potential: dict[str, PotentialBoundary] = field(default_factory=dict)
     heating: float | np.ndarray = 0.0
@@ -555,6 +580,15 @@ class Fluid1D:
 
     def __post_init__(self) -> None:
         """Check the species and index the unknowns."""
+        convert_units(self)
+        self.fixed = {
+            k: to_array(v, "m^-3", f"fixed[{k!r}]") for k, v in self.fixed.items()
+        }
+        self.heating = to_array(self.heating, "W / m^3", "heating")
+        self.sources = {
+            k: to_array(v, "m^-3 / s", f"sources[{k!r}]")
+            for k, v in self.sources.items()
+        }
         if self.length <= 0.0 or self.cells < 3:
             raise ValueError("need length > 0 and at least 3 cells")
         names = [s.name for s in self.species]
@@ -650,8 +684,21 @@ class Fluid1D:
 
         ``fluxes`` start the species with momentum: on the ``cells + 1`` faces
         (as `FluidState.fluxes`), on the ``cells - 1`` faces between
-        cells, or a number; zero if missing.
+        cells, or a number; zero if missing. The densities (m^-3), ``T_e``
+        (eV), ``phi`` (V) and fluxes (m^-2 s^-1) take Quantities or strings
+        such as ``"3 eV"`` too.
         """
+        densities = {
+            k: to_array(v, "m^-3", f"densities[{k!r}]") for k, v in densities.items()
+        }
+        electron_temperature = to_array(
+            electron_temperature, "eV", "electron_temperature"
+        )
+        potential = to_array(potential, "V", "potential")
+        fluxes = {
+            k: to_array(v, "m^-2 / s", f"fluxes[{k!r}]")
+            for k, v in (fluxes or {}).items()
+        }
         u = np.zeros((self.cells, self._nvar))
         for k, name in enumerate(self._names):
             u[:, k] = np.log(
@@ -661,7 +708,7 @@ class Fluid1D:
             ne = np.exp(u[:, self._electron])
             u[:, len(self._names)] = np.log(1.5 * ne * np.asarray(electron_temperature))
         for name, k in self._velocity_column.items():
-            value = np.asarray((fluxes or {}).get(name, 0.0), dtype=float)
+            value = np.asarray(fluxes.get(name, 0.0), dtype=float)
             if value.size == self.cells + 1:
                 value = value[1:-1]
             n = np.exp(u[:, self._names.index(name)])
@@ -1147,7 +1194,12 @@ class Fluid1D:
         return self._newton(unknowns, unknowns, dt)
 
     def advance(self, unknowns: np.ndarray, duration: float, dt: float) -> np.ndarray:
-        """Step ``duration`` seconds with steps of at most ``dt``, halving failed ones."""
+        """Step ``duration`` seconds with steps of at most ``dt``, halving failed ones.
+
+        The times take Quantities or strings such as ``"1 us"`` too.
+        """
+        duration = to_unit(duration, "s", "duration")
+        dt = to_unit(dt, "s", "dt")
         time = 0.0
         u = unknowns
         while time < duration * (1.0 - 1e-12):

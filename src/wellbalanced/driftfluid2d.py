@@ -111,6 +111,7 @@ import scipy.sparse.linalg as spla
 import xarray as xr
 from methodcard import ConvergenceProblem, Rule, method
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
+from plasmacoll.units import convert_units, to_array, to_unit, unit_field
 from scope_profiler import profile
 
 from wellbalanced._profiling import _PROFILE_TAGS
@@ -240,7 +241,12 @@ def argon_momentum_rate(te: np.ndarray | float) -> np.ndarray | float:
 
 
 def exponential_field(b_max: float, scale: float) -> Callable[[np.ndarray], np.ndarray]:
-    """``B(x) = b_max exp(-x / scale)``: the profile of Boeuf (2022), 120 mT and ``0.3 gap``."""
+    """``B(x) = b_max exp(-x / scale)``: the profile of Boeuf (2022), 120 mT and ``0.3 gap``.
+
+    ``b_max`` (T) and ``scale`` (m) take Quantities or strings such as ``"120 mT"`` too.
+    """
+    b_max = to_unit(b_max, "T", "b_max")
+    scale = to_unit(scale, "m", "scale")
 
     def field_of_x(x: np.ndarray) -> np.ndarray:
         return b_max * np.exp(-np.asarray(x) / scale)
@@ -930,30 +936,34 @@ class DriftFluid2D:
             (``"ne"``, ``"ni"``, ``"N"``, ``"vx"``, ``"vy"``, ``"w"``), numbers or arrays
             on the cells, per unit time. `stationary_sources` returns the ones
             that make a given state stationary.
+
+    The physical settings take astropy Quantities or strings such as ``"2 cm"``,
+    ``"20 mT"`` or ``"300 K"`` too, converted to the units above (a magnetic field
+    or momentum rate that is a function is kept as it is).
     """
 
-    length_x: float
-    length_y: float
+    length_x: float = field(metadata={"unit": "m"})
+    length_y: float = field(metadata={"unit": "m"})
     nx: int
     ny: int
-    voltage: float = 260.0
+    voltage: float = unit_field("V", 260.0)
     magnetic_field: Callable[[Any], Any] | float = 0.0
-    gas_density: float = 1.45e20
-    electron_temperature: float | None = 5.0
+    gas_density: float = unit_field("m^-3", 1.45e20)
+    electron_temperature: float | None = unit_field("eV", 5.0)
     momentum_rate: float | Callable[[Any], Any] = argon_momentum_rate
-    ion_friction_rate: float = 1.0e-15
-    ion_mass_u: float = 39.948
-    ion_temperature: float = 0.025
+    ion_friction_rate: float = unit_field("m^3 / s", 1.0e-15)
+    ion_mass_u: float = unit_field("u", 39.948)
+    ion_temperature: float = unit_field("eV", 0.025)
     ionization_rate: Callable[[Any], Any] = argon_ionization_rate
     excitation_rate: Callable[[Any], Any] | None = argon_excitation_rate
-    ionization_energy_ev: float = 15.76
-    excitation_energy_ev: float = 11.56
+    ionization_energy_ev: float = unit_field("eV", 15.76)
+    excitation_energy_ev: float = unit_field("eV", 11.56)
     secondary_emission: float = 0.06
-    cathode_current_density: float | None = None
-    secondary_energy_ev: float = 1.0
-    refill_rate: float = 1.0e4
+    cathode_current_density: float | None = unit_field("A / m^2", None)
+    secondary_energy_ev: float = unit_field("eV", 1.0)
+    refill_rate: float = unit_field("1 / s", 1.0e4)
     depletion: float = 1.0
-    field_bc: float | None = None
+    field_bc: float | None = unit_field("V / m", None)
     periodic_x: bool = False
     heating_scale: float = 1.0
     diamagnetic: float = 1.0
@@ -964,7 +974,7 @@ class DriftFluid2D:
     _rate_override: np.ndarray | None = field(default=None, repr=False)
     _lu: spla.SuperLU | None = field(default=None, repr=False)
     bohm: float = 0.0
-    bohm_below: float | None = None
+    bohm_below: float | None = unit_field("T", None)
     external_sources: dict[str, np.ndarray] = field(default_factory=dict)
 
     def _build_poisson_pattern(self) -> None:
@@ -1130,6 +1140,11 @@ class DriftFluid2D:
 
     def __post_init__(self) -> None:
         """Build the grid and the sparse operators."""
+        convert_units(self)
+        if not callable(self.magnetic_field):
+            self.magnetic_field = to_unit(self.magnetic_field, "T", "magnetic_field")
+        if not callable(self.momentum_rate):
+            self.momentum_rate = to_unit(self.momentum_rate, "m^3 / s", "momentum_rate")
         if self.nx < 4 or self.ny < 4:
             raise ValueError("need at least 4 cells in each direction")
         if self.periodic_x and self.field_bc is None:
@@ -1191,7 +1206,15 @@ class DriftFluid2D:
         """A quasi-neutral plasma of ``density`` (a number or an ``(nx, ny)`` array).
 
         The potential is the vacuum one (linear between the electrodes) unless given.
+        The densities (m^-3), ``T_e`` (eV) and potential (V) take Quantities or strings
+        such as ``"1e15 m^-3"`` too.
         """
+        density = to_array(density, "m^-3", "density")
+        electron_temperature = to_array(
+            electron_temperature, "eV", "electron_temperature"
+        )
+        gas_density = to_array(gas_density, "m^-3", "gas_density")
+        potential = to_array(potential, "V", "potential")
         shape = (self.nx, self.ny)
         n = np.broadcast_to(np.asarray(density, dtype=float), shape).copy()
         te = electron_temperature
@@ -1826,7 +1849,13 @@ class DriftFluid2D:
             record_every: The recording interval (s); ``t_end / 200`` by default.
             probe_x: Where along ``x`` to record (m); mid-gap by default.
             callback: Called with the state at every recording.
+
+        The times and ``probe_x`` take Quantities or strings such as ``"10 us"`` too.
         """
+        t_end = to_unit(t_end, "s", "t_end")
+        dt = to_unit(dt, "s", "dt")
+        record_every = to_unit(record_every, "s", "record_every")
+        probe_x = to_unit(probe_x, "m", "probe_x")
         record_every = t_end / 200.0 if record_every is None else record_every
         probe_x = 0.5 * self.length_x if probe_x is None else probe_x
         index = int(np.argmin(np.abs(self.x - probe_x)))

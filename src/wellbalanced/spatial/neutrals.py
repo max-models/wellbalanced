@@ -102,6 +102,7 @@ import scipy.sparse.linalg as spla
 import xarray as xr
 from methodcard import Rule, method
 from plasmacoll.constants import BOLTZMANN, ELEMENTARY_CHARGE
+from plasmacoll.units import convert_units, rate_to_si, to_array, to_unit, unit_field
 from scipy.special import erf
 from scope_profiler import profile
 
@@ -204,7 +205,8 @@ class Collision:
     rate coefficient ``K`` [m^3/s] (``nu = n_partner K``), a number or a function of
     the pair's temperature ``(m_j T + m T_j) / (m + m_j)`` [eV]; for resonant charge
     exchange (``H+ + H``), which swaps the velocities, ``K`` is twice its rate
-    coefficient.
+    coefficient. A number may also be an astropy Quantity or a string such as
+    ``"1e-15 m^3/s"``.
     """
 
     species: str
@@ -214,6 +216,8 @@ class Collision:
 
     def __post_init__(self) -> None:
         """Validate the collision."""
+        if not callable(self.rate):
+            object.__setattr__(self, "rate", to_unit(self.rate, "m^3/s", "rate"))
         if isinstance(self.rate, (int, float)) and self.rate < 0.0:
             raise ValueError("a rate coefficient must be >= 0")
         if not self.name:
@@ -266,7 +270,12 @@ def hard_sphere(
     """``K(T) = sigma sqrt(8 k T / (pi mu))``: hard spheres of ``sigma`` [m^2].
 
     The mean relative speed of a Maxwellian pair of reduced mass ``mu``; ``T`` in eV.
+    The cross section [m^2] and the masses [kg] take astropy Quantities, strings such
+    as ``"1e-19 m^2"`` or numbers in those units.
     """
+    cross_section = to_unit(cross_section, "m^2", "cross_section")
+    mass_a = to_unit(mass_a, "kg", "mass_a")
+    mass_b = to_unit(mass_b, "kg", "mass_b")
     if cross_section < 0.0 or min(mass_a, mass_b) <= 0.0:
         raise ValueError("a hard sphere needs a cross section >= 0 and masses > 0")
     reduced = mass_a * mass_b / (mass_a + mass_b)
@@ -303,16 +312,21 @@ class Inlet:
 
     ``where`` selects the faces as for `Opening`; the gas comes in effusively
     at ``temperature`` [eV] (the paper's eq. 31), spread over the faces by area.
+    ``rate`` is in 1/s in r–z and in 1/(m s), per metre along ``z``, in a cut. Both
+    take astropy Quantities, strings such as ``"1e19 / s"`` or ``"300 K"`` (a
+    temperature in K or eV) or numbers in those units.
     """
 
     where: Any
     species: str
     rate: float
-    temperature: float = ROOM_TEMPERATURE
+    temperature: float = unit_field("eV", ROOM_TEMPERATURE)
     name: str = "inlet"
 
     def __post_init__(self) -> None:
-        """Validate the inlet."""
+        """Convert the rate and the temperature, and validate the inlet."""
+        convert_units(self)
+        object.__setattr__(self, "rate", rate_to_si(self.rate, "rate"))
         if self.rate < 0.0 or self.temperature <= 0.0:
             raise ValueError("an inlet needs a rate >= 0 and a temperature > 0")
 
@@ -570,6 +584,10 @@ class NeutralFluid2D:
         inlets: Gas inlets.
         fixed: Densities of species not carried [m^-3] (cell fields), e.g. a
             background gas that only collides.
+
+    The wall temperature and the fixed densities take astropy Quantities, strings such
+    as ``"300 K"`` or ``"1e20 m^-3"``, or numbers (cell fields) in the units given; so
+    do the fields of `set_plasma`.
     """
 
     #: The largest batch of states the Jacobian evaluates at once (in numbers).
@@ -780,6 +798,7 @@ class NeutralFluid2D:
             raise ValueError("the model needs a neutral species")
         if len(set(names)) != len(names):
             raise ValueError("species names must be unique")
+        wall_temperature = to_unit(wall_temperature, "eV", "wall_temperature")
         if wall_temperature <= 0.0:
             raise ValueError("the wall temperature must be > 0")
         self.wall_temperature = float(wall_temperature)
@@ -788,7 +807,10 @@ class NeutralFluid2D:
         overlap = set(names) & set(self._plasma_species)
         if overlap:
             raise ValueError(f"species both neutral and plasma: {sorted(overlap)}")
-        fixed = dict(fixed or {})
+        fixed = {
+            name: to_array(value, "m^-3", f"fixed[{name!r}]")
+            for name, value in (fixed or {}).items()
+        }
         known = set(names) | set(self._plasma_species) | set(fixed)
         self.reactions = tuple(
             r for r in reactions if set(names) & (set(r.reactants) | set(r.products))
@@ -920,7 +942,14 @@ class NeutralFluid2D:
         unknown = set(densities) - (set(self._plasma_species) - set(self._fixed))
         if unknown:
             raise ValueError(f"unknown plasma species {sorted(unknown)}")
-        self._plasma = {n: self._on_cells(v)[:, None] for n, v in densities.items()}
+        self._plasma = {
+            n: self._on_cells(to_array(v, "m^-3", f"densities[{n!r}]"))[:, None]
+            for n, v in densities.items()
+        }
+        electron_temperature = to_array(
+            electron_temperature, "eV", "electron_temperature"
+        )
+        ion_temperature = to_array(ion_temperature, "eV", "ion_temperature")
         te = self._on_cells(electron_temperature)[:, None]
         self._electron_temperature = te
         self._ion_temperature = (
@@ -929,11 +958,15 @@ class NeutralFluid2D:
             else self._on_cells(ion_temperature)[:, None]
         )
         self._ion_velocities = {
-            n: (self._on_cells(v[0])[:, None], self._on_cells(v[1])[:, None])
+            n: tuple(
+                self._on_cells(to_array(v[k], "m/s", f"ion_velocities[{n!r}]"))[:, None]
+                for k in (0, 1)
+            )
             for n, v in (ion_velocities or {}).items()
         }
         flux = {}
         for name, values in (ion_wall_flux or {}).items():
+            values = to_array(values, "m^-2 s^-1", f"ion_wall_flux[{name!r}]")
             array = np.asarray(values, dtype=float)
             if array.shape != self._wall_cell.shape:
                 raise ValueError(f"{name}: one ion wall flux per wall face")

@@ -37,6 +37,7 @@ from typing import Any
 
 import numpy as np
 from methodcard import method
+from plasmacoll.units import convert_units, to_array, to_unit, unit_field
 
 from wellbalanced.driver import DriverState, RFDriver
 from wellbalanced.global_model import GlobalState
@@ -62,11 +63,23 @@ class PlasmaProfile:
         electron_density: ``n_e`` [m^-3].
         collision_frequency: ``nu`` [1/s].
         electron_temperature: ``T_e`` [eV], for viscous electrons; ``None``: cold.
+
+    Each is a cell field (a number, an array or a function of the coordinates) in
+    those units, or an astropy Quantity or a string such as ``"1e17 m^-3"``.
     """
 
     electron_density: CellField
     collision_frequency: CellField
     electron_temperature: CellField | None = None
+
+    def __post_init__(self) -> None:
+        """Convert quantities to the units of the fields."""
+        for name, unit in (
+            ("electron_density", "m^-3"),
+            ("collision_frequency", "1/s"),
+            ("electron_temperature", "eV"),
+        ):
+            object.__setattr__(self, name, to_array(getattr(self, name), unit, name))
 
     def settings(self) -> dict[str, Any]:
         """The keyword arguments of `InductiveField2D` this plasma sets."""
@@ -131,12 +144,20 @@ class DriverCoupling:
         plasma: ``absorbed power [W] -> (PlasmaProfile, anything)``.
         network_resistance: ``R_net`` [Ohm].
         depth: The effective depth of a cut [m]; ``None`` in r–z.
+
+    The resistance, the depth and the powers of `at_absorbed_power` and
+    `at_rf_power` take astropy Quantities, strings such as ``"0.6 Ohm"`` or numbers
+    in the units given.
     """
 
     field: Callable[[PlasmaProfile], InductiveField2D]
     plasma: Callable[[float], tuple[PlasmaProfile, Any]]
-    network_resistance: float
-    depth: float | None = None
+    network_resistance: float = unit_field("Ohm")
+    depth: float | None = unit_field("m", None)
+
+    def __post_init__(self) -> None:
+        """Convert the resistance and the depth to Ohm and m."""
+        convert_units(self)
 
     def _pass(self, power: float) -> tuple[InductiveSolution, Any]:
         profile, extra = self.plasma(power)
@@ -144,6 +165,7 @@ class DriverCoupling:
 
     def at_absorbed_power(self, power: float) -> CoupledState:
         """The operating point where the plasma absorbs ``power`` W."""
+        power = to_unit(power, "W", "power")
         if power <= 0.0:
             raise ValueError("power must be positive")
         unit, extra = self._pass(power)
@@ -187,6 +209,8 @@ class DriverCoupling:
         Iterates ``P <- P + relaxation (eta(P) P_RF - P)`` from ``guess`` (half the
         generator power by default) until ``|eta P_RF - P| < tolerance P_RF``.
         """
+        rf_power = to_unit(rf_power, "W", "rf_power")
+        guess = to_unit(guess, "W", "guess")
         if rf_power <= 0.0:
             raise ValueError("rf_power must be positive")
         if not 0.0 < relaxation <= 1.0:

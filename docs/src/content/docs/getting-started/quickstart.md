@@ -12,6 +12,7 @@ Species, reactions with rates from cross sections (averaged over a Maxwellian by
 electrons absorb:
 
 ```python
+import astropy.units as u
 from plasmacoll import CrossSection
 from plasmacoll.constants import ELECTRON_MASS
 
@@ -23,19 +24,27 @@ ionization = Reaction.from_cross_section(
     ("e", "e", "Ar+"),
     CrossSection.constant(2.0e-20, threshold=15.76),
     ELECTRON_MASS,
-    electron_energy_loss=15.76,
+    electron_energy_loss=15.76,  # eV
 )
 model = GlobalModel(
     species=[ELECTRON, argon, argon_ion],
     reactions=[ionization],
-    chamber=Chamber(volume=1.0e-3, wall_area=0.06, h_factor=0.5),
-    power=100.0,  # W
-    fixed={"Ar": 1.0e20},  # m^-3
+    chamber=Chamber(volume=1 * u.L, wall_area="600 cm2", h_factor=0.5),
+    power=100 * u.W,
+    fixed={"Ar": "1e14 cm^-3"},
+    gas_temperature="300 K",
 )
 state = model.steady_state()
-print(state.electron_temperature, state.electron_density)
+print(state.electron_temperature, state.electron_density)  # eV, m^-3
 print(state.power)  # every term of the electron energy balance, in W
 ```
+
+Every physical setting takes an [astropy](https://www.astropy.org) Quantity, a string such
+as `"1e14 cm^-3"` (as in a configuration file) or a plain number in the unit its docstring
+gives: SI, with temperatures and energies in eV (`Magnetron` and `GasDynamics` keep the gas
+temperature in K). They are converted when the model is built, so the models and the results
+hold plain numbers in those units; a value of the wrong dimension raises a `ValueError`.
+Temperatures convert between K, eV and J.
 
 `model.scan("power", [50.0, 100.0, 200.0])` returns the steady states for several values,
 each starting from the last.

@@ -70,6 +70,7 @@ import xarray as xr
 from methodcard import Rule, method
 from plasmacoll import ChargeStateTransitions, charge_state_fractions
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
+from plasmacoll.units import convert_units, to_array, to_unit, unit_field
 from scope_profiler import profile
 
 from wellbalanced._profiling import _PROFILE_TAGS
@@ -147,15 +148,19 @@ class FastBeam:
         current: Electric current of the incoming beam in A.
         mass: Mass of a beam particle in kg.
         initial: Charge-state fractions at the entrance.
+
+    The energy, current and mass take astropy Quantities or strings such as
+    ``"1 MeV"``, ``"10 A"`` or ``"2.014 u"`` too.
     """
 
-    energy: float
-    current: float
-    mass: float
+    energy: float = field(metadata={"unit": "eV"})
+    current: float = field(metadata={"unit": "A"})
+    mass: float = field(metadata={"unit": "kg"})
     initial: Mapping[str, float] = field(default_factory=lambda: {"-": 1.0})
 
     def __post_init__(self) -> None:
         """Validate the beam."""
+        convert_units(self)
         if self.energy <= 0.0 or self.current < 0.0 or self.mass <= 0.0:
             raise ValueError("a beam needs energy > 0, current >= 0 and mass > 0")
         object.__setattr__(self, "initial", dict(self.initial))
@@ -203,6 +208,9 @@ class BeamData:
         secondary_energy: Mean energy (eV) of the secondary electrons of gas
             ionization, per beam state; the neutralizer's ``secondary_energy``
             for a state missing here.
+
+    The cross sections and energies take astropy Quantities or strings such
+    as ``"1e-20 m2"`` or ``"20 eV"`` too.
     """
 
     transitions: ChargeStateTransitions
@@ -218,8 +226,12 @@ class BeamData:
             )
         if set(self.transitions.states) - set(STATE_CHARGES):
             raise ValueError(f"beam states must be among {tuple(STATE_CHARGES)}")
-        object.__setattr__(self, "gas_ionization", dict(self.gas_ionization))
-        object.__setattr__(self, "secondary_energy", dict(self.secondary_energy))
+        object.__setattr__(
+            self, "gas_ionization", to_unit(dict(self.gas_ionization), "m^2")
+        )
+        object.__setattr__(
+            self, "secondary_energy", to_unit(dict(self.secondary_energy), "eV")
+        )
         if any(e < 0.0 for e in self.secondary_energy.values()):
             raise ValueError("secondary energies must be >= 0")
 
@@ -235,8 +247,9 @@ def _evaluate(sigma: float | CrossSectionFunction, energy: float) -> float:
 class BeamCrossSections:
     """The beam's cross sections as functions of its energy; `at` gives `BeamData`.
 
-    Every cross section is a number (m^2) or a function of the beam energy
-    (eV), e.g. a `plasmacoll.CrossSection` tabulated in the lab frame.
+    Every cross section is a number (m^2, or an astropy Quantity or a string
+    such as ``"1e-16 cm2"``) or a function of the beam energy (eV), e.g. a
+    `plasmacoll.CrossSection` tabulated in the lab frame.
     The gas ionization may be a `SecondaryElectrons` instead, such as
     `plasmacoll.RuddIonization` with the beam particle's mass: then the
     secondary electrons' mean energy follows the beam energy too.
@@ -254,8 +267,31 @@ class BeamCrossSections:
     )
     states: Sequence[str] = ("-", "0", "+")
 
+    def __post_init__(self) -> None:
+        """Convert the cross sections that are numbers to m^2."""
+
+        def area(value: Any, name: str) -> Any:
+            if callable(value) or isinstance(value, SecondaryElectrons):
+                return value
+            return to_unit(value, "m^2", name)
+
+        transitions = {
+            target: {
+                pair: area(sigma, f"transitions[{target!r}][{pair!r}]")
+                for pair, sigma in table.items()
+            }
+            for target, table in self.transitions.items()
+        }
+        ionization = {
+            state: area(value, f"gas_ionization[{state!r}]")
+            for state, value in self.gas_ionization.items()
+        }
+        object.__setattr__(self, "transitions", transitions)
+        object.__setattr__(self, "gas_ionization", ionization)
+
     def at(self, energy: float) -> BeamData:
-        """The cross sections at the beam energy ``energy`` (eV)."""
+        """The cross sections at the beam energy ``energy`` (eV, or a Quantity)."""
+        energy = to_unit(energy, "eV", "energy")
         if energy <= 0.0:
             raise ValueError("the beam energy must be > 0")
         transitions = {
@@ -322,17 +358,21 @@ class GasProfile:
         density: The gas density there (m^-3).
         inflow: The molecules fed per second that make this density.
         temperature: The gas temperature (eV) of the profile.
+
+    The physical settings take astropy Quantities or strings such as
+    ``"300 K"`` too (the position and density also as Quantity arrays).
     """
 
     position: np.ndarray
     density: np.ndarray
-    inflow: float
-    temperature: float
+    inflow: float = field(metadata={"unit": "1 / s"})
+    temperature: float = field(metadata={"unit": "eV"})
 
     def __post_init__(self) -> None:
         """Validate the profile."""
-        z = np.asarray(self.position, dtype=float)
-        n = np.asarray(self.density, dtype=float)
+        convert_units(self)
+        z = np.asarray(to_array(self.position, "m", "position"), dtype=float)
+        n = np.asarray(to_array(self.density, "m^-3", "density"), dtype=float)
         if z.ndim != 1 or z.shape != n.shape or z.size < 2:
             raise ValueError("a gas profile needs matching 1D position and density")
         if np.any(np.diff(z) <= 0.0) or np.any(n < 0.0) or not np.any(n > 0.0):
@@ -398,8 +438,19 @@ class GasProfile:
             feed: Where the gas enters (m), between 0 and ``length``.
             diffusivity: The Knudsen diffusivity (m^2/s) at ``temperature``.
             points: Points along the channel.
+
+        The physical arguments take astropy Quantities or strings such as
+        ``"3 m"``, ``"4.028 u"`` or ``"300 K"`` too.
         """
-        feed = 0.5 * length if feed is None else float(feed)
+        length = to_unit(length, "m", "length")
+        width = to_unit(width, "m", "width")
+        height = to_unit(height, "m", "height")
+        mass = to_unit(mass, "kg", "mass")
+        inflow = to_unit(inflow, "1 / s", "inflow")
+        temperature = to_unit(temperature, "eV", "temperature")
+        feed = to_unit(feed, "m", "feed")
+        diffusivity = to_unit(diffusivity, "m^2 / s", "diffusivity")
+        feed = 0.5 * length if feed is None else feed
         if not 0.0 <= feed <= length:
             raise ValueError("the feed must be inside the channel")
         area = width * height
@@ -566,18 +617,21 @@ class Neutralizer:
         relaxation: Under-relaxation of the beam fractions between iterations.
         tolerance: Convergence of the fixed point (largest change of a fraction).
         max_iterations: Fixed-point iterations at most.
+
+    The physical settings take astropy Quantities or strings such as
+    ``"3 m"``, ``"2e21 1/s"`` or ``"350 K"`` too, converted to the units above.
     """
 
-    length: float
-    width: float
-    height: float
+    length: float = field(metadata={"unit": "m"})
+    width: float = field(metadata={"unit": "m"})
+    height: float = field(metadata={"unit": "m"})
     beam: FastBeam
     data: BeamData | BeamCrossSections
     species: Sequence[Species]
     reactions: Sequence[Reaction]
     gas: str
     gas_ion: str
-    gas_inflow: float
+    gas_inflow: float = field(metadata={"unit": "1 / s"})
     atoms: Mapping[str, tuple[float, str]] = field(default_factory=dict)
     transmission: float = 1.0
     cusp: Cusp | None = None
@@ -586,7 +640,7 @@ class Neutralizer:
     wall_reactions: Sequence[WallReaction] = ()
     ion_wall_products: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
     fast_electron_deposition: float = 1.0
-    secondary_energy: float = 10.0
+    secondary_energy: float = unit_field("eV", 10.0)
     points: int = 201
     relaxation: float = 0.5
     tolerance: float = 1.0e-6
@@ -595,6 +649,11 @@ class Neutralizer:
 
     def __post_init__(self) -> None:
         """Validate the geometry and the names."""
+        convert_units(self)
+        if not isinstance(self.gas_temperature, GasTemperature):
+            self.gas_temperature = to_unit(
+                self.gas_temperature, "eV", "gas_temperature"
+            )
         if min(self.length, self.width, self.height) <= 0.0:
             raise ValueError("the channel needs a positive length, width and height")
         profile = self.gas_profile
@@ -659,6 +718,7 @@ class Neutralizer:
 
     def beam_data(self, energy: float | None = None) -> BeamData:
         """The beam's cross sections at ``energy`` (eV; the beam's by default)."""
+        energy = to_unit(energy, "eV", "energy")
         if isinstance(self.data, BeamData):
             if energy is not None and energy != self.beam.energy:
                 raise ValueError(
@@ -776,11 +836,19 @@ class Neutralizer:
             gas_fractions: The fractions for the processes on the fed gas, if
                 they differ (the global model's, weighted with the gas profile).
 
+            The flux and energy take astropy Quantities or strings such as
+            ``"1e19 m^-2 s^-1"`` or ``"1 MeV"`` too.
+
         Returns:
             One `wellbalanced.VolumeSource` per process, its rate per
             unit density of its target (a number, or an array like ``flux``).
         """
-        energy = self.beam.energy if energy is None else float(energy)
+        flux = to_array(flux, "m^-2 / s", "flux")
+        energy = (
+            self.beam.energy
+            if energy is None
+            else float(to_unit(energy, "eV", "energy"))
+        )
         data = self.beam_data(energy)
         states = data.transitions.states
         shares = np.asarray(fractions, dtype=float)

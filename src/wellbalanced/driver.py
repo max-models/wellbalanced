@@ -65,6 +65,7 @@ import xarray as xr
 from methodcard import Rule, method
 from plasmacoll import CrossSection
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
+from plasmacoll.units import convert_units, to_array, to_unit, unit_field
 from scipy.constants import mu_0 as MU_0
 from scipy.special import ellipe, ellipk, jve
 
@@ -195,16 +196,18 @@ class Coil:
     """The RF coil: ``turns`` windings of ``radius`` (m) over ``length`` (m).
 
     ``field_factor`` is the ratio of its inductance to the long-solenoid one;
-    Nagaoka's coefficient of the coil if ``None``.
+    Nagaoka's coefficient of the coil if ``None``. The radius and length take
+    astropy Quantities or strings such as ``"13.85 cm"`` too.
     """
 
     turns: float
-    radius: float
-    length: float
+    radius: float = field(metadata={"unit": "m"})
+    length: float = field(metadata={"unit": "m"})
     field_factor: float | None = None
 
     def __post_init__(self) -> None:
         """Validate the coil."""
+        convert_units(self)
         if min(self.turns, self.radius, self.length) <= 0.0:
             raise ValueError("a coil needs turns, radius and length > 0")
         if self.field_factor is not None and not 0.0 < self.field_factor <= 1.0:
@@ -554,27 +557,34 @@ class RFDriver:
             ``"solenoid"``, the exact uniform column (`solenoid_impedance`).
         model_options: Further fields of the `GlobalModel` (gas
             temperature, wall reactions, ion wall products, ...).
+
+    The physical settings, and the absorbed power (W) of the methods, take
+    astropy Quantities or strings such as ``"1 MHz"`` or ``"17 cm"`` too.
     """
 
     species: Sequence[Species]
     reactions: Sequence[Reaction]
     fixed: Mapping[str, float]
-    radius: float
-    length: float
+    radius: float = field(metadata={"unit": "m"})
+    length: float = field(metadata={"unit": "m"})
     coil_turns: float
-    coil_radius: float
-    frequency: float
-    network_resistance: float
+    coil_radius: float = field(metadata={"unit": "m"})
+    frequency: float = field(metadata={"unit": "Hz"})
+    network_resistance: float = field(metadata={"unit": "Ohm"})
     momentum_transfer: Sequence[str]
-    ion_mean_free_path: float
+    ion_mean_free_path: float = field(metadata={"unit": "m"})
     skin_density_factor: float = 1.0
-    coil_length: float | None = None
+    coil_length: float | None = unit_field("m", None)
     field_factor: float | None = None
     coupling: Literal["transformer", "solenoid"] = "transformer"
     model_options: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate the driver."""
+        convert_units(self)
+        self.fixed = {
+            k: to_array(v, "m^-3", f"fixed[{k!r}]") for k, v in self.fixed.items()
+        }
         if min(self.radius, self.length, self.frequency, self.ion_mean_free_path) <= 0:
             raise ValueError(
                 "radius, length, frequency, ion_mean_free_path must be > 0"
@@ -617,6 +627,7 @@ class RFDriver:
 
     def model(self, power: float) -> GlobalModel:
         """The global model of the driver plasma absorbing ``power`` W."""
+        power = to_unit(power, "W", "power")
         return GlobalModel(
             species=self.species,
             reactions=self.reactions,
@@ -628,6 +639,7 @@ class RFDriver:
 
     def couple(self, plasma: GlobalState, power: float) -> DriverState:
         """The coil's view of a plasma absorbing ``power`` W."""
+        power = to_unit(power, "W", "power")
         ne = plasma.electron_density
         nu = sum(plasma.reaction_rates[name] for name in self.momentum_transfer) / ne
         n_skin = self.skin_density_factor * ne
@@ -652,6 +664,7 @@ class RFDriver:
         self, power: float, guess: GlobalState | Mapping[str, float] | None = None
     ) -> DriverState:
         """The driver absorbing ``power`` W; ``guess`` starts the global model."""
+        power = to_unit(power, "W", "power")
         plasma = self.model(power).steady_state(guess)
         if not plasma.converged:
             warnings.warn(
@@ -678,7 +691,7 @@ class RFDriver:
         previous = guess
         for value in values:
             if parameter == "power":
-                driver, absorbed = self, float(value)
+                driver, absorbed = self, to_unit(value, "W", "power")
             else:
                 if power is None:
                     raise ValueError("a scan of a driver field needs the power")

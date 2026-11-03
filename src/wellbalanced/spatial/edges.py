@@ -33,6 +33,7 @@ from typing import Any, Literal
 import numpy as np
 import scipy.sparse as sp
 from methodcard import method
+from plasmacoll.units import to_unit
 
 __all__ = ["EdgeGrid", "SideBoundary"]
 
@@ -77,6 +78,9 @@ class EdgeGrid:
         cells: Cells along each axis.
         boundaries: Per axis, one of ``"dirichlet"``, ``"natural"``, ``"periodic"``, or a
             pair ``(lower side, upper side)``; default Dirichlet everywhere.
+
+    The corners take astropy Quantities, strings such as ``"[0, 0, 0.1] m"`` or numbers
+    in metres.
     """
 
     def _edge_count(self, axis: int) -> int:
@@ -131,8 +135,8 @@ class EdgeGrid:
         boundaries: Sequence[Any] = ("dirichlet", "dirichlet", "dirichlet"),
     ) -> None:
         """Count the nodes, edges and faces and compute the Hodge diagonals."""
-        self.lower = np.asarray(lower, dtype=float)
-        self.upper = np.asarray(upper, dtype=float)
+        self.lower = np.asarray(to_unit(lower, "m", "lower"), dtype=float)
+        self.upper = np.asarray(to_unit(upper, "m", "upper"), dtype=float)
         self.cells = tuple(int(n) for n in cells)
         if self.lower.shape != (3,) or self.upper.shape != (3,) or len(self.cells) != 3:
             raise ValueError("a 3D grid needs three lower, upper and cell counts")

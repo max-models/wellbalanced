@@ -37,6 +37,7 @@ from typing import Any, Literal
 import numpy as np
 import scipy.sparse as sp
 from methodcard import ConvergenceProblem, method
+from plasmacoll.units import to_array, to_unit
 
 __all__ = [
     "AxisBoundary",
@@ -66,8 +67,14 @@ def stretched_edges(
 
     Uniform ``spacing`` on ``[fine_lower, fine_upper]``, growing by ``ratio`` per cell
     toward ``lower`` and ``upper``. The outermost cells are shortened to end at
-    ``lower`` and ``upper``.
+    ``lower`` and ``upper``. The positions and the spacing are lengths [m]: astropy
+    Quantities, strings such as ``"5 mm"`` or numbers in metres.
     """
+    lower = to_unit(lower, "m", "lower")
+    upper = to_unit(upper, "m", "upper")
+    fine_lower = to_unit(fine_lower, "m", "fine_lower")
+    fine_upper = to_unit(fine_upper, "m", "fine_upper")
+    spacing = to_unit(spacing, "m", "spacing")
     if not lower <= fine_lower < fine_upper <= upper:
         raise ValueError("need lower <= fine_lower < fine_upper <= upper")
     count = max(1, round((fine_upper - fine_lower) / spacing))
@@ -218,6 +225,9 @@ class CellGrid:
             the edge), ``"neumann"`` (no flux) or ``"periodic"``. In r–z the radial
             axis cannot be periodic, and its lower boundary is the axis when the
             first edge is 0, whatever is given.
+
+    The edges take astropy Quantities, strings such as ``"[0, 1, 2] cm"`` or numbers
+    in metres.
     """
 
     def __init__(
@@ -229,8 +239,8 @@ class CellGrid:
         boundaries: tuple[AxisBoundary, AxisBoundary] = ("dirichlet", "dirichlet"),
     ) -> None:
         """Check the edges and compute the cell geometry."""
-        self.x_edges = np.asarray(x_edges, dtype=float)
-        self.y_edges = np.asarray(y_edges, dtype=float)
+        self.x_edges = np.asarray(to_array(x_edges, "m", "x_edges"), dtype=float)
+        self.y_edges = np.asarray(to_array(y_edges, "m", "y_edges"), dtype=float)
         for edges in (self.x_edges, self.y_edges):
             if edges.ndim != 1 or edges.size < 2 or np.any(np.diff(edges) <= 0):
                 raise ValueError("cell edges must be increasing, at least two")

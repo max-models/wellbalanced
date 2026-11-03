@@ -61,12 +61,13 @@ from __future__ import annotations
 import dataclasses
 import warnings
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import xarray as xr
 from methodcard import Rule, method
 from plasmacoll.constants import BOLTZMANN, ELECTRON_MASS, ELEMENTARY_CHARGE
+from plasmacoll.units import convert_units, to_array, to_unit, unit_field
 from scipy.optimize import brentq
 from scipy.special import exp1
 
@@ -299,21 +300,25 @@ class TargetMaterial:
         self_secondary: Secondary electrons emitted per metal ion.
         charge_exchange: Rate of ``Ar+ + M -> Ar + M+`` in m^3/s.
         verified: ``False`` while the yields and rates are placeholders.
+
+    The mass, energy and rate take astropy Quantities or strings such as
+    ``"6.83 eV"`` too.
     """
 
     name: str
-    mass_u: float
-    ionization_energy: float
+    mass_u: float = field(metadata={"unit": "u"})
+    ionization_energy: float = field(metadata={"unit": "eV"})
     outer_electrons: int
     argon_yield: float
     self_yield: float
     argon_secondary: float
     self_secondary: float
-    charge_exchange: float
+    charge_exchange: float = field(metadata={"unit": "m^3 / s"})
     verified: bool = False
 
     def __post_init__(self) -> None:
         """Validate the material."""
+        convert_units(self)
         if self.mass_u <= 0.0 or self.ionization_energy <= 0.0:
             raise ValueError("mass_u and ionization_energy must be > 0")
         if min(self.argon_yield, self.self_yield) < 0.0:
@@ -376,7 +381,12 @@ COPPER = MATERIALS["Cu"]
 def pulse(
     on: float, on_time: float, period: float, off: float = 0.0
 ) -> Callable[[float], float]:
-    """A rectangular waveform: ``on`` for ``on_time`` of every ``period``, else ``off``."""
+    """A rectangular waveform: ``on`` for ``on_time`` of every ``period``, else ``off``.
+
+    The times are in s, or Quantities or strings such as ``"50 us"``.
+    """
+    on_time = to_unit(on_time, "s", "on_time")
+    period = to_unit(period, "s", "period")
     if not 0.0 < on_time < period:
         raise ValueError("on_time must be in (0, period)")
 
@@ -436,22 +446,28 @@ class Magnetron:
         seed: A pair source in m^-3 s^-1 that stands for the residual plasma
             and preionization at the start of a pulse; it keeps the density from
             decaying to zero in the afterglow.
+
+    The physical settings take astropy Quantities or strings such as
+    ``"0.5 Pa"``, ``"10 mTorr"`` or ``"20 mm"`` too (the gas temperature also
+    in eV), converted to the units above; the discharge current (A) and
+    voltage (V) of the methods likewise.
     """
 
     material: TargetMaterial = TITANIUM
-    target_area: float = 1.0e-3
-    region_height: float = 0.02
-    side_area: float = 1.0e-4
+    target_area: float = unit_field("m^2", 1.0e-3)
+    region_height: float = unit_field("m", 0.02)
+    side_area: float = unit_field("m^2", 1.0e-4)
     h_factor: float = 0.5
-    pressure: float = 1.0
-    gas_temperature: float = 300.0
-    refill_time: float = 1.0e-4
+    pressure: float = unit_field("Pa", 1.0)
+    gas_temperature: float = unit_field("K", 300.0)
+    refill_time: float = unit_field("s", 1.0e-4)
     wind_efficiency: float = 0.0
     heating_fraction: float = 1.0
-    seed: float = 1.0e19
+    seed: float = unit_field("m^-3 / s", 1.0e19)
 
     def __post_init__(self) -> None:
         """Validate the magnetron, and warn about placeholder data."""
+        convert_units(self)
         positive = (
             self.target_area,
             self.region_height,
@@ -629,9 +645,13 @@ class Magnetron:
     ) -> GlobalModel:
         """The global model driven by the discharge current ``I_D(t)`` and voltage ``V_D(t)``.
 
-        Each is a number (dc) or a function of the time in s, e.g. from
-        `pulse`.
+        Each is a number (dc) in A and V, a Quantity or a string such as
+        ``"20 A"``, or a function of the time in s, e.g. from `pulse`.
         """
+        if not callable(current):
+            current = to_unit(current, "A", "current")
+        if not callable(voltage):
+            voltage = to_unit(voltage, "V", "voltage")
 
         def absorbed(t: float) -> float:
             i = current(t) if callable(current) else current
@@ -654,7 +674,8 @@ class Magnetron:
         )
 
     def guess(self, ion_density: float = 1.0e17) -> dict[str, float]:
-        """A starting state: the filling gas and a plasma of ``ion_density``."""
+        """A starting state: the filling gas and a plasma of ``ion_density`` (m^-3)."""
+        ion_density = to_unit(ion_density, "m^-3", "ion_density")
         s = self.species
         return {
             s["gas"].name: self.gas_density,
@@ -686,6 +707,7 @@ class Magnetron:
         ``ValueError`` if no value up to 10 does, which says that the sputter
         yields or the geometry are off.
         """
+        current = to_unit(current, "A", "current")
 
         def mismatch(fraction: float) -> float:
             magnetron = dataclasses.replace(self, heating_fraction=fraction)
@@ -826,7 +848,13 @@ class Magnetron:
         and ``attrs["periods"]`` how many were run. The variables are the
         densities, the electron temperature, the model's currents at the target
         (``I_D``, ``I_<ion>``), the sputtered flux and the metal ion fraction.
+        The current (A), voltage (V) and times (s) take Quantities or strings
+        such as ``"100 us"`` too.
         """
+        current = to_unit(current, "A", "current")
+        voltage = to_unit(voltage, "V", "voltage")
+        on_time = to_unit(on_time, "s", "on_time")
+        period = to_unit(period, "s", "period")
         if not 0.0 < on_time < period:
             raise ValueError("on_time must be in (0, period)")
         drive_current = pulse(current, on_time, period)
@@ -869,8 +897,13 @@ class Magnetron:
         ``voltage`` is a number or a function of the current ``V_D(I_D)``, e.g.
         the measured characteristic. Every state starts from the last (a
         continuation); the dataset has the densities (``species``), the
-        `diagnostics` and the model's ``I_D`` over ``current``.
+        `diagnostics` and the model's ``I_D`` over ``current``. The currents
+        (A) and a voltage (V) take Quantities or strings such as ``"[5, 10] A"``
+        too.
         """
+        currents = to_array(currents, "A", "currents")
+        if not callable(voltage):
+            voltage = to_unit(voltage, "V", "voltage")
         states: list[GlobalState] = []
         previous: GlobalState | None = None
         for current in currents:

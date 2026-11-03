@@ -20,6 +20,12 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   24 slits, optional EMS with supports) on reduced grids, with the cut cells cached.
 - `InductiveField3D(cut_cell_samples=...)`: the sampling of the cut cells' crossings.
 
+- Units in the setup: every physical setting of the models (species, reactions, the global
+  model, the magnetron, `Fluid1D`, `Fluid2D`, the RF driver and the inductive fields, the
+  neutralizer, the gas dynamics, the neutral gas, the dispersion relations and the drift fluid)
+  takes an astropy Quantity, a string such as `"1e14 cm^-3"` or a number in its documented
+  unit, converted once with `plasmacoll.units`; the stored units are unchanged. Adds
+  `astropy` to the test extra.
 - Method cards (methodcard) on the equations of the models: the reactions, the global model
   (cusps, wall areas, gas temperature, the steady state), the OpenCR rates, the neutralizer
   (beam, Knudsen profile, pumping, fractions, sources, fixed point), the 0D RF driver

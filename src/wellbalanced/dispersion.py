@@ -49,12 +49,14 @@ predictions this serves are in the spokes3d transport theory notes
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import copy
+from dataclasses import dataclass, field
 
 import numpy as np
 import xarray as xr
 from methodcard import Rule, method
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
+from plasmacoll.units import convert_units, to_unit, unit_field
 from scipy.special import wofz
 
 __all__ = [
@@ -125,19 +127,24 @@ class Plasma:
     ``electron_collision_frequency`` (1/s) and ``ionization_frequency`` (1/s, the source
     ``nu_iz n_e`` of both species). ``curl_free_field`` doubles the ``E x B`` and
     diamagnetic compressibility from ``B / B'``: the vacuum (3D arch) field instead of the
-    2D model field ``B(x) z`` (see the module docstring).
+    2D model field ``B(x) z`` (see the module docstring). Each physical setting
+    also takes an astropy Quantity or a string such as ``"20 mT"`` or ``"3 eV"``.
     """
 
-    density: float
-    e_field: float
-    b_field: float
-    electron_temperature: float
-    density_length: float
-    field_length: float = np.inf
-    e_field_length: float = np.inf
-    electron_collision_frequency: float = 0.0
-    ionization_frequency: float = 0.0
+    density: float = field(metadata={"unit": "m^-3"})
+    e_field: float = field(metadata={"unit": "V / m"})
+    b_field: float = field(metadata={"unit": "T"})
+    electron_temperature: float = field(metadata={"unit": "eV"})
+    density_length: float = field(metadata={"unit": "m"})
+    field_length: float = unit_field("m", np.inf)
+    e_field_length: float = unit_field("m", np.inf)
+    electron_collision_frequency: float = unit_field("1 / s", 0.0)
+    ionization_frequency: float = unit_field("1 / s", 0.0)
     curl_free_field: bool = False
+
+    def __post_init__(self) -> None:
+        """Convert the units."""
+        convert_units(self)
 
     @property
     def omega_ce(self) -> float:
@@ -173,11 +180,18 @@ class Plasma:
 
 @dataclass(frozen=True)
 class ColdIons:
-    """Cold fluid ions: ``mass`` (kg), flow ``(v_0x, v_0y)`` (m/s), ``collision_frequency`` (1/s)."""
+    """Cold fluid ions: ``mass`` (kg), flow ``(v_0x, v_0y)`` (m/s), ``collision_frequency`` (1/s).
 
-    mass: float = ARGON_MASS
-    flow: tuple[float, float] = (0.0, 0.0)
-    collision_frequency: float = 0.0
+    Each also takes an astropy Quantity or a string such as ``"40 u"``.
+    """
+
+    mass: float = unit_field("kg", ARGON_MASS)
+    flow: tuple[float, float] = unit_field("m / s", (0.0, 0.0))
+    collision_frequency: float = unit_field("1 / s", 0.0)
+
+    def __post_init__(self) -> None:
+        """Convert the units."""
+        convert_units(self)
 
     def response(
         self, omega: complex, kx: float, ky: float, plasma: Plasma, a_e: complex
@@ -213,11 +227,16 @@ class KineticIons:
     ``delta n_i / n_0 = -(e delta phi / T_i) [1 + zeta Z(zeta)]`` with
     ``zeta = (omega - k . v_0) / (sqrt(2) k v_ti)``: the Landau resonance with the ion thermal
     motion and the Doppler shift of the flow, no collisions, no gradient convection.
+    Each setting also takes an astropy Quantity or a string such as ``"300 K"``.
     """
 
-    mass: float = ARGON_MASS
-    temperature: float = 0.026
-    flow: tuple[float, float] = (0.0, 0.0)
+    mass: float = unit_field("kg", ARGON_MASS)
+    temperature: float = unit_field("eV", 0.026)
+    flow: tuple[float, float] = unit_field("m / s", (0.0, 0.0))
+
+    def __post_init__(self) -> None:
+        """Convert the units."""
+        convert_units(self)
 
     def response(
         self, omega: complex, kx: float, ky: float, plasma: Plasma, a_e: complex
@@ -327,10 +346,16 @@ class LocalDispersion:
         """
         p = self.plasma
         te = p.electron_temperature * E
-        plasma = Plasma(
-            p.density, e_field, b_field, p.electron_temperature, p.density_length,
-            p.field_length, p.e_field_length, p.electron_collision_frequency,
-        )  # fmt: skip
+        # a copy of the converted plasma: a new Plasma would convert its units again,
+        # which costs more than this solve
+        plasma = copy.copy(p)
+        for name, value in (
+            ("e_field", e_field),
+            ("b_field", b_field),
+            ("ionization_frequency", 0.0),
+            ("curl_free_field", False),
+        ):
+            object.__setattr__(plasma, name, value)
         v0x, v0y = plasma.electron_flow
         shear = plasma.flow_shear
         omega_ce = E * b_field / ELECTRON_MASS
@@ -550,8 +575,13 @@ def scan_profile(
     centred differences. ``ions`` default to cold argon; ``branch`` as in
     `LocalDispersion.scan`. Returns ``growth_rate``, ``frequency`` and
     ``phase_speed`` on ``x``, every root as ``omega_re`` and ``omega_im`` on ``(x, root)``,
-    and the lengths used.
+    and the lengths used. ``ky`` (1/m) and ``electron_collision_frequency``
+    (1/s) also take Quantities or strings such as ``"100 1/m"``.
     """
+    ky = to_unit(ky, "1 / m", "ky")
+    electron_collision_frequency = to_unit(
+        electron_collision_frequency, "1 / s", "electron_collision_frequency"
+    )
     ions = ColdIons() if ions is None else ions
     x = profile["x"].values
     n = profile["density"].values

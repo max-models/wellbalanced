@@ -3,7 +3,7 @@
 The model balances, averaged over the volume ``V`` of the ionization region in
 front of the racetrack of a sputtering magnetron, five species: electrons,
 argon ``Ar`` and ``Ar+``, and the sputtered target metal ``M`` and ``M+``. It is
-a :class:`~wellbalanced.GlobalModel` with the closures of the pulsed-magnetron
+a `wellbalanced.GlobalModel` with the closures of the pulsed-magnetron
 global models (Raadu et al., *Plasma Sources Sci. Technol.* 20, 065007, 2011;
 Huo et al., *J. Phys. D* 46, 045204, 2013: the ionization region model):
 
@@ -12,7 +12,7 @@ Huo et al., *J. Phys. D* 46, 045204, 2013: the ionization region model):
 - **Ion losses** at the Bohm speed through the target (area ``A_t``) and the
   other boundaries of the region, times an edge-to-centre ratio ``h``. The
   ions that reach the target sputter it, ``Y_Ar`` atoms per ``Ar+`` and
-  ``Y_M`` per ``M+`` (self-sputtering): a :class:`~wellbalanced.VolumeSource`
+  ``Y_M`` per ``M+`` (self-sputtering): a `wellbalanced.VolumeSource`
   per unit ion density, ``Y h u_B(T_e) A_t / V``. An ``Ar+`` that reaches a wall
   returns as ``Ar``; an ``M+`` that does is lost (deposited).
 - **Return of the metal**: the sputtered atoms leave the region at a quarter of
@@ -49,7 +49,7 @@ the refill time, the seed source) is a **placeholder** of the right order of
 magnitude, to be replaced by data for the target and the device: yields from
 TRIM/SRIM or measured tables at the ion energy of the cathode fall, secondary
 electron yields from the literature on ion-induced emission for the target
-material, geometry from the magnetron. A :class:`Magnetron` with a placeholder
+material, geometry from the magnetron. A `Magnetron` with a placeholder
 material warns.
 
 All temperatures are in eV, densities in m^-3, areas in m^2, currents in A and
@@ -65,6 +65,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import xarray as xr
+from methodcard import Rule, method
 from plasmacoll.constants import BOLTZMANN, ELECTRON_MASS, ELEMENTARY_CHARGE
 from scipy.optimize import brentq
 from scipy.special import exp1
@@ -108,18 +109,100 @@ def _fit_range(te: np.ndarray | float) -> np.ndarray | float:
     return np.clip(te, 1.0e-2, 1.0e3)
 
 
+_ARGON_RANGES = {"te": (1.0, 50.0)}
+
+
+def _argon_ionization_rules() -> dict:
+    """The SymPy rule of `argon_ionization` (for the tests)."""
+    import sympy
+
+    te = sympy.Symbol("te", positive=True)
+    rule = (
+        sympy.Float("2.34e-14")
+        * te ** sympy.Float("0.59")
+        * sympy.exp(-sympy.Float("17.44") / te)
+    )
+    return {"rate": Rule(rule, ranges=_ARGON_RANGES)}
+
+
+@method(
+    equations={
+        "rate": r"K_\mathrm{iz} = 2.34\times10^{-14}\, T_e^{0.59}\, e^{-17.44/T_e} \quad [\mathrm{m^3/s}], \qquad \varepsilon_\mathrm{iz} = 15.76\ \mathrm{eV}",
+    },
+    assumptions=(
+        r"$T_e$ clipped to 0.01–1000 eV, where the fits are evaluated",
+        r"a Maxwellian electron energy distribution",
+    ),
+    references=(
+        "Lieberman and Lichtenberg, Principles of Plasma Discharges and Materials Processing, 2nd ed. (2005), ch. 3",
+    ),
+    symbolic=_argon_ionization_rules,
+)
 def argon_ionization(te: np.ndarray | float) -> np.ndarray | float:
     """``K_iz = 2.34e-14 T_e^0.59 exp(-17.44 / T_e)`` m^3/s (Lieberman and Lichtenberg)."""
     te = _fit_range(te)
     return 2.34e-14 * te**0.59 * np.exp(-17.44 / te)
 
 
+def _argon_excitation_rules() -> dict:
+    """The SymPy rule of `argon_excitation` (for the tests)."""
+    import sympy
+
+    te = sympy.Symbol("te", positive=True)
+    rule = (
+        sympy.Float("2.48e-14")
+        * te ** sympy.Float("0.33")
+        * sympy.exp(-sympy.Float("12.78") / te)
+    )
+    return {"rate": Rule(rule, ranges=_ARGON_RANGES)}
+
+
+@method(
+    equations={
+        "rate": r"K_\mathrm{ex} = 2.48\times10^{-14}\, T_e^{0.33}\, e^{-12.78/T_e} \quad [\mathrm{m^3/s}], \qquad \varepsilon_\mathrm{ex} = 11.56\ \mathrm{eV}",
+    },
+    assumptions=(
+        r"$T_e$ clipped to 0.01–1000 eV, where the fits are evaluated",
+        r"a Maxwellian electron energy distribution",
+    ),
+    references=(
+        "Lieberman and Lichtenberg, Principles of Plasma Discharges and Materials Processing, 2nd ed. (2005), ch. 3",
+    ),
+    symbolic=_argon_excitation_rules,
+)
 def argon_excitation(te: np.ndarray | float) -> np.ndarray | float:
     """``K_ex = 2.48e-14 T_e^0.33 exp(-12.78 / T_e)`` m^3/s (Lieberman and Lichtenberg)."""
     te = _fit_range(te)
     return 2.48e-14 * te**0.33 * np.exp(-12.78 / te)
 
 
+def _argon_elastic_rules() -> dict:
+    """The SymPy rule of `argon_elastic` (for the tests)."""
+    import sympy
+
+    te = sympy.Symbol("te", positive=True)
+    ln = sympy.log(te)
+    rule = (
+        sympy.Float("2.336e-14")
+        * te ** sympy.Float("1.609")
+        * sympy.exp(sympy.Float("0.0618") * ln**2 - sympy.Float("0.1171") * ln**3)
+    )
+    return {"rate": Rule(rule, ranges=_ARGON_RANGES)}
+
+
+@method(
+    equations={
+        "rate": r"K_\mathrm{el} = 2.336\times10^{-14}\, T_e^{1.609} \exp\!\left(0.0618 \ln^2 T_e - 0.1171 \ln^3 T_e\right) \quad [\mathrm{m^3/s}]",
+    },
+    assumptions=(
+        r"$T_e$ clipped to 0.01–1000 eV, where the fits are evaluated",
+        r"a Maxwellian electron energy distribution",
+    ),
+    references=(
+        "Lieberman and Lichtenberg, Principles of Plasma Discharges and Materials Processing, 2nd ed. (2005), ch. 3",
+    ),
+    symbolic=_argon_elastic_rules,
+)
 def argon_elastic(te: np.ndarray | float) -> np.ndarray | float:
     """The elastic rate of electrons on argon in m^3/s (Lieberman and Lichtenberg's fit).
 
@@ -130,6 +213,49 @@ def argon_elastic(te: np.ndarray | float) -> np.ndarray | float:
     return 2.336e-14 * te**1.609 * np.exp(0.0618 * ln**2 - 0.1171 * ln**3)
 
 
+def _lotz_rules() -> dict:
+    """The SymPy rule of `lotz_ionization` (for the tests)."""
+    import sympy
+
+    i, xi, te = sympy.symbols("ionization_energy electrons te", positive=True)
+    prefactor = sympy.sqrt(8 * sympy.Float(E) / (sympy.pi * sympy.Float(ELECTRON_MASS)))
+    rule = (
+        prefactor
+        * xi
+        * sympy.Float(LOTZ_CONSTANT)
+        * sympy.expint(1, i / te)
+        / (i * sympy.sqrt(te))
+    )
+    return {
+        "rate": Rule(
+            rule,
+            implementation=lambda ionization_energy, electrons, te: lotz_ionization(
+                ionization_energy, electrons
+            )(te),
+            ranges={
+                "ionization_energy": (5.0, 10.0),
+                "electrons": (1.0, 3.0),
+                "te": (1.0, 20.0),
+            },
+        )
+    }
+
+
+@method(
+    equations={
+        "cross_section": r"\sigma(E) = \xi\, a\, \frac{\ln(E/I)}{E\, I} \quad (E > I), \qquad a = 4.5\times10^{-14}\ \mathrm{cm^2\,eV^2}",
+        "rate": r"K = \sqrt{\frac{8e}{\pi m_e}}\, \frac{\xi\, a\, E_1(I/T_e)}{I \sqrt{T_e}}",
+    },
+    assumptions=(
+        r"the Lotz cross section averaged over a Maxwellian in closed form; $E_1$ the exponential integral",
+        r"$\xi$ the electrons of the outer shell, $I$ the ionization energy; good to a factor of about two",
+        r"$T_e$ clipped to 0.01–1000 eV",
+    ),
+    references=(
+        "[Lotz, Z. Phys. 206, 205 (1967)](https://doi.org/10.1007/BF01325928)",
+    ),
+    symbolic=_lotz_rules,
+)
 def lotz_ionization(
     ionization_energy: float, electrons: int
 ) -> Callable[[np.ndarray | float], np.ndarray | float]:
@@ -242,7 +368,7 @@ MATERIALS: dict[str, TargetMaterial] = {
     )
 }
 
-#: Titanium and copper, the defaults of the examples (placeholder yields, see :data:`MATERIALS`).
+#: Titanium and copper, the defaults of the examples (placeholder yields, see `MATERIALS`).
 TITANIUM = MATERIALS["Ti"]
 COPPER = MATERIALS["Cu"]
 
@@ -260,6 +386,31 @@ def pulse(
     return waveform
 
 
+@method(
+    equations={
+        "geometry": r"V = A_t h_r, \qquad A_w = 2A_t + A_s, \qquad A_\mathrm{loss} = A_t + A_s",
+        "sputtering": r"S_M = Y\, \frac{h\, u_B(T_e) A_t}{V}\, n_i \quad (Y_\mathrm{Ar} \text{ per Ar}^+,\ Y_M \text{ per M}^+), \qquad S_\mathrm{wind} = -\eta_w S_M \text{ (Ar)}",
+        "gas": r"F_\mathrm{Ar} = \frac{n_\mathrm{fill} V}{\tau}, \qquad \text{Ar} \to \varnothing \text{ at the rate } \frac{1}{\tau}",
+        "heating": r"P = f\, \frac{\gamma}{1 + \gamma}\, I_D(t)\, V_D(t)",
+        "currents": r"I_i = e\, n_i\, h\, u_B A_t, \qquad I_D = \sum_i (1 + \gamma_i)\, I_i",
+    },
+    assumptions=(
+        r"the ionization region as a `GlobalModel` of e, Ar, Ar$^+$, M, M$^+$; metal sticks at the walls, Ar$^+$ returns as Ar",
+        r"no metastables, no multiply charged ions, no gas heating; a drive by the voltage alone has no steady state",
+        r"yields, secondary yields, charge exchange and the geometry are placeholders (`MATERIALS`)",
+    ),
+    references=(
+        "[Raadu et al., Plasma Sources Sci. Technol. 20, 065007 (2011)](https://doi.org/10.1088/0963-0252/20/6/065007)",
+        "Huo et al., J. Phys. D 46, 045204 (2013)",
+    ),
+    components=(
+        GlobalModel,
+        argon_ionization,
+        argon_excitation,
+        argon_elastic,
+        lotz_ionization,
+    ),
+)
 @dataclass(frozen=True)
 class Magnetron:
     """The ionization region of a magnetron: geometry, gas and target; see the module docstring.
@@ -280,7 +431,7 @@ class Magnetron:
         wind_efficiency: Ar atoms pushed out per sputtered atom (0: no sputter wind).
         heating_fraction: The share of the secondary electron energy the plasma
             electrons keep: at most 1 if the secondary electron yield is right;
-            a larger value, as :meth:`calibrate_heating` may find, means the yield
+            a larger value, as `calibrate_heating` may find, means the yield
             of the placeholder material is too low (only the product matters).
         seed: A pair source in m^-3 s^-1 that stands for the residual plasma
             and preionization at the start of a pulse; it keeps the density from
@@ -479,7 +630,7 @@ class Magnetron:
         """The global model driven by the discharge current ``I_D(t)`` and voltage ``V_D(t)``.
 
         Each is a number (dc) or a function of the time in s, e.g. from
-        :func:`pulse`.
+        `pulse`.
         """
 
         def absorbed(t: float) -> float:
@@ -529,7 +680,7 @@ class Magnetron:
 
         The share of the secondary electron energy that heats the plasma is the
         least known closure. The model's own ion current to the target,
-        ``I_D`` of :meth:`target_currents`, rises with it; this fits it to one
+        ``I_D`` of `target_currents`, rises with it; this fits it to one
         measured point so that the others are predictions. A value above 1
         means the secondary electron yield is too low; it raises a
         ``ValueError`` if no value up to 10 does, which says that the sputter
@@ -718,7 +869,7 @@ class Magnetron:
         ``voltage`` is a number or a function of the current ``V_D(I_D)``, e.g.
         the measured characteristic. Every state starts from the last (a
         continuation); the dataset has the densities (``species``), the
-        :meth:`diagnostics` and the model's ``I_D`` over ``current``.
+        `diagnostics` and the model's ``I_D`` over ``current``.
         """
         states: list[GlobalState] = []
         previous: GlobalState | None = None

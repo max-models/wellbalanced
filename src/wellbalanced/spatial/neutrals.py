@@ -23,39 +23,39 @@ The power ``P`` holds the energy exchange of the collisions (friction and temper
 the form of Schunk, Rev. Geophys. 15, 429, 1977, with the paper's reduced-mass
 frequency: ``mu_nj n nu_nj / (m + m_j) (3 k (T_j - T) + m_j |u - u_j|^2)``; the first
 part is the "directed energy transfer" that heats the gas where the ions drift), the
-heat of the reactions (:attr:`~wellbalanced.reactions.Reaction.gas_heating`, e.g. the
+heat of the reactions (`wellbalanced.reactions.Reaction.gas_heating`, e.g. the
 Franck–Condon energy of dissociation, and the electrons' elastic loss), and the thermal
 energy of the particles the reactions make and destroy: products are born with the
 velocity and temperature of their heavy reactants (their centre of mass), so a
 reaction that only moves particles between species conserves momentum and heat.
 
-**The plasma** is an input (:meth:`NeutralFluid2D.set_plasma`, or
-:meth:`NeutralFluid2D.plasma_from` a :class:`~wellbalanced.spatial.Fluid2D` state): its
+**The plasma** is an input (`NeutralFluid2D.set_plasma`, or
+`NeutralFluid2D.plasma_from` a `wellbalanced.spatial.Fluid2D` state): its
 densities and ``T_e`` for the reactions, the ions' velocities and temperature for the
 collisions, and the ion flux to each wall face, which comes back as neutrals
 (``ion_wall_products``, e.g. ``H3+ -> H2 + H``). The reactions are the
-:class:`~wellbalanced.reactions.Reaction` objects of the plasma model (rates from
+`wellbalanced.reactions.Reaction` objects of the plasma model (rates from
 plasmacoll), the ones that make or destroy a neutral; their other species are plasma
-species or ``fixed``. :func:`couple_neutrals` iterates the two models to a common
+species or ``fixed``. `couple_neutrals` iterates the two models to a common
 steady state: the neutrals in the plasma's sources and wall fluxes, the plasma in the
 neutrals' densities and mean temperature (the plasma model has one gas temperature).
 
 **Walls**, kinetically as in the paper (eqs. 25–31): each species leaves a wall cell
 with the forward flux of a drifting half Maxwellian, ``n u_eff`` (eq. 26), and its
 energy flux (eq. 29); it comes back reflected (all but the wall-loss probability),
-recombined (:class:`~wellbalanced.global_model.WallReaction`: ``WallReaction("H",
+recombined (`wellbalanced.global_model.WallReaction`: ``WallReaction("H",
 gamma, {"H2": 0.5})`` for atoms that recombine with the probability ``gamma``) and from
 the ions; what comes back carries ``(1 - alpha)`` of the incident energy and ``alpha``
 of the wall's, ``(2 + z / 2) k T_wall`` per particle (the accommodation ``alpha``; the
-ions come back accommodated). An :class:`Opening` (the grid) lets the fraction
+ions come back accommodated). An `Opening` (the grid) lets the fraction
 ``transparency`` of what hits it out: everything that comes back there is scaled by
-``1 - transparency``. An :class:`Inlet` injects a species (particles per second over
+``1 - transparency``. An `Inlet` injects a species (particles per second over
 its faces, ``(2 + z / 2) k T`` per particle). In the momentum equation the walls are
 no-slip; the species' fluxes through them are the kinetic ones above.
 
-**Discretisation**: the cells and faces of :class:`~wellbalanced.spatial.Fluid2D`
-(a :class:`~wellbalanced.spatial.CellGrid` or a single-level
-:class:`~wellbalanced.spatial.PatchGrid`, r–z or a cut; a face to a cell outside the
+**Discretisation**: the cells and faces of `wellbalanced.spatial.Fluid2D`
+(a `wellbalanced.spatial.CellGrid` or a single-level
+`wellbalanced.spatial.PatchGrid`, r–z or a cut; a face to a cell outside the
 region is a wall, a ``"neumann"`` edge a symmetry plane). Finite volumes, every species'
 particles and the total energy conserved to round-off. The velocities are at the cell
 centres; the face mass flux is the mean of the two cells' velocities with a Rhie–Chow
@@ -67,7 +67,7 @@ the velocity together without a staggered grid and vanishes for a smooth pressur
 (as in the paper, eq. 20). Backward Euler, all equations implicit, Newton's method in
 the logarithms of the densities and temperatures with a finite-difference Jacobian on a
 colouring of the cells (the stencil reaches two cells: the Rhie–Chow term and the
-divergence's gradient); :meth:`NeutralFluid2D.steady_state` steps in pseudo-time with a
+divergence's gradient); `NeutralFluid2D.steady_state` steps in pseudo-time with a
 growing step and then solves the steady equations.
 
 **Validity.** This is the continuum limit. At 0.3 Pa the mean free path of H2 is a few
@@ -81,7 +81,7 @@ quadrature of the drifting half Maxwellian; the nuclei (``n_H + 2 n_H2``) conser
 round-off over time steps with reflecting walls (and changing by exactly the ionized
 nuclei with ionization on); the 0D limit (a closed box with a uniform plasma) against a
 direct ODE solve, with first-order convergence in the time step; and the BUG driver
-coupled to :class:`~wellbalanced.spatial.Fluid2D` (depletion, heating, the nuclei
+coupled to `wellbalanced.spatial.Fluid2D` (depletion, heating, the nuclei
 balance of inlet, grid and ions).
 
 Data: the collision rate coefficients, the wall probabilities, the accommodation and
@@ -100,6 +100,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import xarray as xr
+from methodcard import Rule, method
 from plasmacoll.constants import BOLTZMANN, ELEMENTARY_CHARGE
 from scipy.special import erf
 from scope_profiler import profile
@@ -149,7 +150,7 @@ class NeutralSpecies:
     """A neutral fluid: its species and internal degrees of freedom.
 
     Attributes:
-        species: Name and mass (a neutral :class:`~wellbalanced.species.Species`).
+        species: Name and mass (a neutral `wellbalanced.species.Species`).
         internal: The internal degrees of freedom ``z`` that store energy (0 for an
             atom; Zielke et al. take 3 for H2: two rotational, one vibrational).
     """
@@ -225,6 +226,40 @@ class Collision:
         return np.asarray(self.rate(temperature), dtype=float)
 
 
+def _hard_sphere_rules() -> dict:
+    """The SymPy rule of `hard_sphere` (for the tests)."""
+    import sympy
+
+    sigma, ma, mb, t = sympy.symbols(
+        "cross_section mass_a mass_b temperature", positive=True
+    )
+    rule = sigma * sympy.sqrt(8 * sympy.Float(E) * t / (sympy.pi * ma * mb / (ma + mb)))
+    return {
+        "rate": Rule(
+            rule,
+            implementation=lambda cross_section, mass_a, mass_b, temperature: (
+                hard_sphere(cross_section, mass_a, mass_b)(temperature)
+            ),
+            ranges={
+                "cross_section": (1.0e-20, 1.0e-18),
+                "mass_a": (1.6e-27, 3.4e-27),
+                "mass_b": (1.6e-27, 3.4e-27),
+                "temperature": (0.01, 1.0),
+            },
+            rtol=1e-12,
+        )
+    }
+
+
+@method(
+    equations={
+        "rate": r"K(T) = \sigma\sqrt{\frac{8 e T}{\pi\mu}}, \qquad \mu = \frac{m_a m_b}{m_a + m_b}",
+    },
+    assumptions=(
+        r"the mean relative speed of a Maxwellian pair; $T$ in eV, floored at $10^{-4}$ eV",
+    ),
+    symbolic=_hard_sphere_rules,
+)
 def hard_sphere(
     cross_section: float, mass_a: float, mass_b: float
 ) -> Callable[[np.ndarray], np.ndarray]:
@@ -266,7 +301,7 @@ class Opening:
 class Inlet:
     """A gas inlet: ``rate`` particles of ``species`` per second over its wall faces.
 
-    ``where`` selects the faces as for :class:`Opening`; the gas comes in effusively
+    ``where`` selects the faces as for `Opening`; the gas comes in effusively
     at ``temperature`` [eV] (the paper's eq. 31), spread over the faces by area.
     """
 
@@ -282,6 +317,57 @@ class Inlet:
             raise ValueError("an inlet needs a rate >= 0 and a temperature > 0")
 
 
+def _half_maxwellian_rules() -> dict:
+    """The SymPy rules of `half_maxwellian_fluxes` (for the tests)."""
+    import sympy
+
+    n, t, m = sympy.symbols("density temperature mass", positive=True)
+    u = sympy.Symbol("velocity", real=True)
+    e = sympy.Float(E)
+    vp = sympy.sqrt(2 * e * t / m)
+    s = u / vp
+    gauss = sympy.exp(-(s**2))
+    tail = sympy.sqrt(sympy.pi) * s * (1 + sympy.erf(s))
+    particles = n * vp / (2 * sympy.sqrt(sympy.pi)) * (gauss + tail)
+    normal = (
+        n
+        * m
+        * vp**3
+        / (4 * sympy.sqrt(sympy.pi) * e)
+        * ((1 + s**2) * gauss + tail * (sympy.Rational(3, 2) + s**2))
+    )
+    ranges = {
+        "density": (1.0e18, 1.0e20),
+        "temperature": (0.02, 1.0),
+        "mass": (1.6e-27, 3.4e-27),
+        "velocity": (-3000.0, 3000.0),
+    }
+
+    def flux(index: int):
+        return lambda **kwargs: half_maxwellian_fluxes(**kwargs)[index]
+
+    return {
+        "particles": Rule(particles, implementation=flux(0), ranges=ranges, rtol=1e-12),
+        "energy": Rule(
+            normal + particles * t, implementation=flux(1), ranges=ranges, rtol=1e-12
+        ),
+    }
+
+
+@method(
+    equations={
+        "particles": r"\Gamma = n\, u_\mathrm{eff} = \frac{n v_p}{2\sqrt\pi}\left(e^{-s^2} + \sqrt\pi\, s\,(1 + \mathrm{erf}\, s)\right), \qquad v_p = \sqrt{\frac{2eT}{m}}, \quad s = \frac{u}{v_p}",
+        "energy": r"Q = \frac{n m v_p^3}{4\sqrt\pi\, e}\left((1 + s^2) e^{-s^2} + \sqrt\pi\, s\,(1 + \mathrm{erf}\, s)\left(\tfrac32 + s^2\right)\right) + \left(1 + \frac{z}{2}\right) T\,\Gamma",
+    },
+    assumptions=(
+        r"the particles of a drifting Maxwellian that cross a plane along its normal; without drift $n\bar v/4$ and $(2 + z/2)T$ each",
+        r"$z$ internal degrees of freedom carrying $z/2\,T$ per particle; $T$ floored at $10^{-4}$ eV",
+    ),
+    references=(
+        "[Zielke et al., Plasma Sources Sci. Technol. 31, 035019 (2022)](https://doi.org/10.1088/1361-6595/ac5845), eqs. 26 and 29",
+    ),
+    symbolic=_half_maxwellian_rules,
+)
 def half_maxwellian_fluxes(
     density: np.ndarray,
     temperature: np.ndarray,
@@ -436,16 +522,38 @@ def _factorized(matrix: sp.csc_matrix):
         return None
 
 
+@method(
+    equations={
+        "continuity": r"\partial_t n + \nabla\cdot(n\mathbf u) = R_n",
+        "momentum": r"\partial_t(m n\mathbf u) + \nabla\cdot(m n\mathbf u\mathbf u) = -\nabla(n e T) + \mu\left(\nabla^2\mathbf u + \tfrac13\nabla\nabla\cdot\mathbf u\right) - \sum_j \mu_{nj} n\nu_{nj}(\mathbf u - \mathbf u_j) + \mathbf S_R",
+        "energy": r"\partial_t\left(\tfrac{3 + z}{2} n T\right) + \nabla\cdot\mathbf Q = P, \qquad \mathbf Q = \tfrac{5 + z}{2} T n\mathbf u - \kappa\nabla T",
+        "transport": r"\mu = \frac{\tfrac23 m n e T}{\sum_j\mu_{nj}\nu_{nj}}, \qquad \kappa = \frac{\tfrac{5 + z}{2} n e T}{\sum_j\mu_{nj}\nu_{nj}}, \qquad \mu_{nj} = \frac{m m_j}{m + m_j}, \quad \nu_{nj} = n_j K_{nj}",
+        "exchange": r"P_{nj} = \frac{\mu_{nj} n\nu_{nj}}{m + m_j}\left(3(T_j - T) + \frac{m_j|\mathbf u - \mathbf u_j|^2}{e}\right)",
+        "walls": r"\Gamma_\mathrm{out} = n u_\mathrm{eff}, \qquad \text{back: } (1 - \textstyle\sum\gamma)\Gamma_\mathrm{out} + \text{products} + \text{ion wall products}, \quad (1 - \alpha)\,\text{incident} + \alpha(2 + z/2)T_\mathrm{wall}",
+        "rhie_chow": r"\Gamma_f = n_f\left(\bar{\mathbf u}_f - \frac{(\nabla p)_f - \overline{\nabla p}_f}{a_P}\right)\cdot\hat{\mathbf n}",
+    },
+    assumptions=(
+        r"$K_{nj}$ at the pair temperature $(m_j T + m T_j)/(m + m_j)$; $j$ includes the species itself in the denominators only",
+        r"products born at the heavy reactants' centre-of-mass velocity and mass-weighted temperature; r–z keeps $-\mu u_r/r^2$, $\nabla\mu$ is dropped",
+        r"cell-centred velocities and temperatures, Rhie–Chow face fluxes, no-slip walls with the kinetic fluxes; backward Euler, Newton in $\ln n$, $\ln T$",
+        r"the continuum limit at Knudsen numbers 0.1–0.3: no kinetic check yet; collision rates and wall data are placeholders",
+    ),
+    references=(
+        "[Zielke et al., Plasma Sources Sci. Technol. 31, 035019 (2022)](https://doi.org/10.1088/1361-6595/ac5845), eqs. 18-31",
+        "[Schunk, Rev. Geophys. 15, 429 (1977)](https://doi.org/10.1029/RG015i004p00429)",
+    ),
+    components=(half_maxwellian_fluxes, hard_sphere),
+)
 class NeutralFluid2D:
     """The neutral gas on the cells of a grid; see the module docstring.
 
     Args:
-        grid: A :class:`CellGrid` or a single-level :class:`PatchGrid`.
+        grid: A `CellGrid` or a single-level `PatchGrid`.
         species: The neutral fluids.
         reactions: Volume reactions; those that make or destroy a neutral are used,
             their other species must be plasma species (``plasma_species``) or
             ``fixed``.
-        region: Where the gas is: a :class:`PlasmaRegion`, a mask, or ``None`` (every
+        region: Where the gas is: a `PlasmaRegion`, a mask, or ``None`` (every
             cell).
         plasma_species: The plasma's species (names and masses), the electrons
             (``"e"``) included, and the masses of ``fixed`` gases (a fixed gas not
@@ -807,7 +915,7 @@ class NeutralFluid2D:
             ion_velocities: In-plane velocities of ions [m/s] (zero if not given).
             ion_temperature: The ions' temperature [eV] (the wall's if not given).
             ion_wall_flux: The flux of every ion into each wall face [m^-2 s^-1],
-                over :attr:`wall_faces`; it comes back as ``ion_wall_products``.
+                over `wall_faces`; it comes back as ``ion_wall_products``.
         """
         unknown = set(densities) - (set(self._plasma_species) - set(self._fixed))
         if unknown:
@@ -839,7 +947,7 @@ class NeutralFluid2D:
         }
 
     def plasma_from(self, fluid: Fluid2D, state: Fluid2DState) -> None:
-        """Set the plasma of a :class:`~wellbalanced.spatial.Fluid2D` state.
+        """Set the plasma of a `wellbalanced.spatial.Fluid2D` state.
 
         Its densities, ``T_e``, ion velocities and gas temperature (the ions'), and its
         ion fluxes to the walls, matched to this model's wall faces (the two must be on
@@ -1193,7 +1301,7 @@ class NeutralFluid2D:
     def _scale(self, unknowns: np.ndarray) -> dict[str, Any]:
         """The scales of the residuals: the largest density, ``n T`` and pressure.
 
-        Held fixed through a Newton solve (:meth:`_newton`): scales that moved with the
+        Held fixed through a Newton solve (`_newton`): scales that moved with the
         unknowns would enter the finite-difference Jacobian.
         """
         densities, _, temperatures = self._unpack(np.asarray(unknowns).reshape(-1))
@@ -1262,7 +1370,7 @@ class NeutralFluid2D:
         """The Jacobian by finite differences: one column per colour and unknown.
 
         The perturbed states go through the residual as one batch (in chunks of at
-        most :attr:`BATCH_SIZE` numbers).
+        most `BATCH_SIZE` numbers).
         """
         nvar, n = self._nvar, self.size
         base = self._residual(unknowns, previous, dt).reshape(n, nvar)
@@ -1324,7 +1432,7 @@ class NeutralFluid2D:
         """Solve the (backward Euler or steady) equations; return the solution and success.
 
         Newton's method with the finite-difference Jacobian, kept while the steps
-        shrink fast (as :class:`~wellbalanced.spatial.Fluid2D`'s), the residuals'
+        shrink fast (as `wellbalanced.spatial.Fluid2D`'s), the residuals'
         scales held at those of the start.
         """
         if max_iterations is None:
@@ -1423,7 +1531,7 @@ class NeutralFluid2D:
     def state(
         self, unknowns: np.ndarray, time: float = 0.0, converged: bool = True
     ) -> NeutralState:
-        """The :class:`NeutralState` of a vector of unknowns."""
+        """The `NeutralState` of a vector of unknowns."""
         densities, velocities, temperatures = self._unpack(unknowns)
         rates = self._reactions(densities, velocities, temperatures, 1)[0]
         return NeutralState(
@@ -1554,6 +1662,18 @@ class CoupledNeutrals:
     history: list[float] = field(default_factory=list)
 
 
+@method(
+    equations={
+        "pass": r"N^{k+1} = \text{steady } \texttt{NeutralFluid2D}(\text{plasma}^k), \qquad \text{plasma}^{k+1} = \text{steady } \texttt{Fluid2D}\big(r N^{k+1} + (1 - r) N^k,\ \langle T_g\rangle\big)",
+        "mean_free_path": r"\lambda_i \leftarrow \lambda_i\,\frac{\langle N\rangle_\mathrm{start}}{\langle N\rangle}",
+        "stop": r"\max_s \frac{\max|\Delta n_s|}{\max n_s} < \text{tolerance} \ (10^{-3}), \quad \text{at most 30 passes}",
+    },
+    assumptions=(
+        r"the plasma model has one gas temperature: the density-weighted mean of the neutrals'",
+        r"each plasma solve from the last state with $\Delta t = 10^{-7}$ s, retried with the default; a failed solve stops the passes",
+    ),
+    components=(NeutralFluid2D,),
+)
 def couple_neutrals(
     plasma: Fluid2D,
     neutrals: NeutralFluid2D,
@@ -1568,7 +1688,7 @@ def couple_neutrals(
     """The plasma and the neutral gas iterated to a common steady state.
 
     Each pass: the gas's steady state in the plasma's reactions, collisions and ion
-    wall fluxes (:meth:`NeutralFluid2D.plasma_from`), then the plasma's steady state in
+    wall fluxes (`NeutralFluid2D.plasma_from`), then the plasma's steady state in
     that gas (its densities as the plasma's fixed species, its density-weighted mean
     temperature as the plasma's gas temperature; the densities mixed with the last by
     ``relaxation``). ``mean_free_path`` scales the plasma's ion mean free paths with

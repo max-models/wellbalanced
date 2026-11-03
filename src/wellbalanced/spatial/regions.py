@@ -1,10 +1,10 @@
 """Regions of the plane, marked on the cells of a grid (tensor or patches).
 
-A :class:`PlasmaRegion` is where the plasma is (the driver and the expansion region,
+A `PlasmaRegion` is where the plasma is (the driver and the expansion region,
 say): the union of its shapes minus the excluded ones. The spatial models set the plasma
 to zero outside it; a fluid model (``Fluid2D``) will take its cells as unknowns and its
 edges as walls. Shapes are anything with ``contains_points`` (simgeometry shapes), as
-everywhere in :mod:`wellbalanced.spatial`.
+everywhere in `wellbalanced.spatial`.
 """
 
 from __future__ import annotations

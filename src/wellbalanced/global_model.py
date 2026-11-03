@@ -30,7 +30,7 @@ and returned as products.
 All temperatures are in eV, densities in m^-3, rates in m^-3 s^-1 and powers in
 W. The steady state is found by integrating the balances in the logarithms of
 the densities and temperatures (they stay positive) with an implicit method,
-then refining it with a root finder: :meth:`GlobalModel.steady_state`.
+then refining it with a root finder: `GlobalModel.steady_state`.
 """
 
 from __future__ import annotations
@@ -42,6 +42,7 @@ from typing import Any
 
 import numpy as np
 import xarray as xr
+from methodcard import Rule, method
 from plasmacoll.constants import BOLTZMANN, ELECTRON_MASS, ELEMENTARY_CHARGE
 from scipy.integrate import solve_ivp
 from scipy.optimize import root
@@ -65,6 +66,31 @@ __all__ = [
 E = ELEMENTARY_CHARGE
 
 
+def _leak_width_rules() -> dict:
+    """The SymPy rule of `Cusp.leak_width` (for the tests)."""
+    import sympy
+
+    b, te, ti, m = sympy.symbols("field te ti mass", positive=True)
+    e, me = sympy.Float(E), sympy.Float(ELECTRON_MASS)
+    rho_e, rho_i = sympy.sqrt(me * te * e) / (e * b), sympy.sqrt(m * ti * e) / (e * b)
+    ranges = {
+        "field": (0.01, 0.3),
+        "te": (1.0, 20.0),
+        "ti": (0.02, 0.5),
+        "mass": (1.6e-27, 7.0e-26),
+    }
+    return {
+        "leak_width": Rule(
+            4 * sympy.sqrt(rho_e * rho_i),
+            implementation=lambda field, te, ti, mass: Cusp(field, 1.0).leak_width(
+                te, ti, mass
+            ),
+            ranges=ranges,
+            rtol=1e-12,
+        )
+    }
+
+
 @dataclass(frozen=True)
 class Cusp:
     """Multicusp magnetic confinement: cusp lines with a field at the wall.
@@ -83,6 +109,18 @@ class Cusp:
         if self.field <= 0.0 or self.line_length < 0.0:
             raise ValueError("a cusp needs field > 0 and line_length >= 0")
 
+    @method(
+        equations={
+            "leak_width": r"w = 4\sqrt{\rho_e \rho_i}, \qquad \rho = \frac{\sqrt{m\, e T}}{e B}",
+            "area": r"A_\mathrm{cusp} = L_c\, w",
+        },
+        assumptions=(
+            r"the gyroradius at the thermal speed $\sqrt{eT/m}$: $T_e$ for $\rho_e$, $T_g$ for $\rho_i$",
+            r"$B$ the cusp field at the wall, $L_c$ the total length of the cusp lines",
+        ),
+        references=("Bosch and Merlino (1986), the hybrid leak width",),
+        symbolic=_leak_width_rules,
+    )
     def leak_width(
         self, electron_temperature: float, ion_temperature: float, ion_mass: float
     ) -> float:
@@ -98,6 +136,35 @@ class Cusp:
         return self.line_length * self.leak_width(
             electron_temperature, ion_temperature, ion_mass
         )
+
+
+def _ion_area_rules() -> dict:
+    """The SymPy rule of `Chamber.ion_area` (for the tests)."""
+    import sympy
+
+    h, area, length, b, te, ti, m = sympy.symbols(
+        "h area length field te ti mass", positive=True
+    )
+    e, me = sympy.Float(E), sympy.Float(ELECTRON_MASS)
+    rho_e, rho_i = sympy.sqrt(me * te * e) / (e * b), sympy.sqrt(m * ti * e) / (e * b)
+    rule = h * area + length * 4 * sympy.sqrt(rho_e * rho_i)
+
+    def ion_area(h, area, length, field, te, ti, mass):
+        chamber = Chamber(1.0, 2.0 * area, area, h, Cusp(field, length))
+        return chamber.ion_area(te, ti, mass)
+
+    ranges = {
+        "h": (0.1, 1.0),
+        "area": (0.01, 1.0),
+        "length": (0.1, 50.0),
+        "field": (0.01, 0.3),
+        "te": (1.0, 20.0),
+        "ti": (0.02, 0.5),
+        "mass": (1.6e-27, 7.0e-26),
+    }
+    return {
+        "area": Rule(rule, implementation=ion_area, ranges=ranges, rtol=1e-12),
+    }
 
 
 @dataclass(frozen=True)
@@ -126,6 +193,20 @@ class Chamber:
         if not 0.0 < self.h_factor <= 1.0:
             raise ValueError("h_factor must be in (0, 1]")
 
+    @method(
+        equations={
+            "area": r"A_i = h\, A_\mathrm{loss} + L_c\, w(T_e, T_g, M_i)",
+        },
+        assumptions=(
+            r"$h \in (0, 1]$ the edge-to-centre density ratio, an input",
+            r"$A_\mathrm{loss}$ the unconfined area, the whole wall by default; the cusp area depends on the ion's mass, so each ion has its own $A_i$",
+        ),
+        references=(
+            "Lieberman and Lichtenberg, Principles of Plasma Discharges and Materials Processing, 2nd ed. (2005), ch. 10",
+        ),
+        components=(Cusp.leak_width,),
+        symbolic=_ion_area_rules,
+    )
     def ion_area(
         self, electron_temperature: float, ion_temperature: float, ion_mass: float
     ) -> float:
@@ -138,6 +219,16 @@ class Chamber:
         return area
 
 
+@method(
+    equations={
+        "balance": r"c\, N\, \frac{dT_g}{dt} = \sum_\mathrm{reactions} R\,\varepsilon_g - \frac{\kappa\,(T_g - T_w)}{\Lambda^2}\,\frac{1}{k_B}",
+    },
+    assumptions=(
+        r"$N$ the total neutral density, fixed species included; $c$ the heat capacity per particle in $k_B$",
+        r"conduction to the walls over the diffusion length $\Lambda$; the eV difference converted with $e/k_B$",
+        r"$c$ only sets the time scale of $T_g$: the steady state does not depend on it",
+    ),
+)
 @dataclass(frozen=True)
 class GasTemperature:
     """The gas temperature as a balance: heating by the reactions against conduction.
@@ -172,7 +263,7 @@ class VolumeSource:
     ``rate`` may be a function of the electron and gas temperatures in eV,
     ``rate(T_e, T_g)``, for a source that follows the plasma, e.g. sputtering
     by the ion flux to a target (``per = ("Ar+",)``, ``rate`` the Bohm flux
-    times the yield per volume). In a :class:`~wellbalanced.Fluid1D` it may
+    times the yield per volume). In a `wellbalanced.Fluid1D` it may
     also be an array on the cells, a source that varies in space.
     """
 
@@ -309,6 +400,29 @@ class GlobalState:
         )
 
 
+@method(
+    equations={
+        "particles": r"\frac{dn_s}{dt} = \sum_\mathrm{reactions} \nu_s R + \sum_\mathrm{sources} c_s S - \Gamma^w_s + \sum_\mathrm{walls} (\text{products}) + \frac{F_s}{V} - \frac{n_s S_p}{V}",
+        "sources": r"S = \text{rate} \prod_\mathrm{per} n, \qquad n_e = \sum_s Z_s n_s",
+        "ion_wall_loss": r"\Gamma^w_i = n_i \sqrt{\frac{e T_e}{M_i}}\, \frac{A_i}{V}",
+        "neutral_wall_loss": r"\Gamma^w_n = \gamma\, \frac{\bar v}{4}\, n\, \frac{A_w}{V}, \qquad \bar v = \sqrt{\frac{8 e T_g}{\pi m}}",
+        "electron_wall_loss": r"\Gamma_e = \Gamma_+ + \dot q_-, \qquad \Gamma_+ = \sum_i Z_i \Gamma^w_i, \qquad \dot q_- = -\sum_\mathrm{sources} \sum_s Z_s c_s S",
+        "energy": r"\frac{d}{dt}\left(\tfrac32 n_e T_e\right) = \frac{P_\mathrm{abs}}{eV} - \sum R\,\varepsilon_e + \sum S\,\varepsilon_\mathrm{src} - P_w",
+        "wall_energy": r"P_w = 2 T_e \Gamma_e + \tfrac12 T_e \sum_i \Gamma^w_i + \Gamma_+ \Delta\phi + (\Gamma_e - \Gamma_+)\left(\tfrac12 T_e + \Delta\phi\right)",
+        "sheath": r"\Delta\phi = \frac{\sum_i Z_i \Gamma^w_i V_{f,i}}{\Gamma_+} - T_e \ln\frac{\Gamma_e}{\Gamma_+}, \qquad V_{f,i} = T_e \ln\sqrt{\frac{M_i}{2\pi m_e}}",
+    },
+    assumptions=(
+        r"a uniform plasma with Maxwellian electrons; Bohm losses need $\lambda_D \ll$ the chamber",
+        r"$\nu_s$ the stoichiometric change, $c_s$ the change per source event, $F_s$ the feed (1/s), $S_p$ the pumping speed (unknown neutrals only)",
+        r"negative ions do not reach the walls; the Bohm speed carries no factor $Z$",
+        r"the presheath $\tfrac12 T_e$ is per ion and the sheath drop per charge, the same only for $Z = 1$",
+        r"$n_e$ floored at 1 m$^{-3}$ in the energy equation; a fixed species' $dn/dt$ is reported, not integrated",
+    ),
+    references=(
+        "Lieberman and Lichtenberg, Principles of Plasma Discharges and Materials Processing, 2nd ed. (2005), ch. 10",
+    ),
+    components=(Reaction, Chamber.ion_area, GasTemperature),
+)
 @dataclass
 class GlobalModel:
     """The balances of a plasma in a chamber; see the module docstring.
@@ -318,7 +432,7 @@ class GlobalModel:
         reactions: The volume reactions.
         chamber: Volume, walls and confinement.
         power: Power absorbed by the electrons in W, or a function of the time in
-            s, ``power(t)``, for :meth:`GlobalModel.evolve` (a steady state is
+            s, ``power(t)``, for `GlobalModel.evolve` (a steady state is
             then taken at ``t = 0``).
         fixed: Densities held fixed (m^-3), e.g. a gas at a given pressure.
         feed: Particles per second fed into the chamber, by species.
@@ -599,7 +713,7 @@ class GlobalModel:
     def evaluate(
         self, state: np.ndarray, converged: bool = True, t: float = 0.0
     ) -> GlobalState:
-        """Return the :class:`GlobalState` of a state vector at ``t``, with every term."""
+        """Return the `GlobalState` of a state vector at ``t``, with every term."""
         terms = self._terms(state, t)
         power = {k: float(v) for k, v in terms["power"].items()}
         balance = {name: float(terms["change"][name]) for name in terms["densities"]}
@@ -631,6 +745,20 @@ class GlobalModel:
     # -- solving ----------------------------------------------------------------------
 
     @profile("wellbalanced.GlobalModel.steady_state", tags=_PROFILE_TAGS)
+    @method(
+        equations={
+            "unknowns": r"u = (\ln n_s,\ \ln T_e,\ [\ln T_g]), \qquad \frac{d \ln u}{dt} = \frac{\dot u}{u}",
+            "pseudo_time": r"\text{BDF from } t = 0 \text{ to } t_\mathrm{max} \text{ until } \max\left|\frac{d\ln u}{dt}\right| < 10^{-6}\, \sigma, \qquad \sigma = \max\left(\max_s \frac{\text{gross}_s}{n_s},\ 1\right)",
+            "polish": r"\text{Powell's hybrid root finder on } \frac{d\ln u}{dt} = 0 \ (\text{tol } 10^{-13})",
+            "converged": r"\max\left|\frac{d\ln u}{dt}\right| < \text{tolerance}\cdot\sigma",
+        },
+        assumptions=(
+            r"`solve_ivp(method='BDF', rtol=1e-6, atol=1e-9)`; the BDF end point is kept if the root finder fails",
+            r"start: given densities, else positive ions $10^{-4}$, negative ions $10^{-6}$, neutrals $10^{-2}$ of the fixed gas density, $T_e = 3$ eV",
+            r"the log state clipped to $\pm 600$ (densities) and $\pm 100$ (temperatures)",
+            r"`thermalize_electrons` pulls $\ln T_e$ up to $\ln T_g$ on $10^{-8}$ s",
+        ),
+    )
     def steady_state(
         self,
         initial: Mapping[str, float] | GlobalState | None = None,
@@ -641,7 +769,7 @@ class GlobalModel:
         """Return the steady state.
 
         The balances are integrated in pseudo-time from ``initial`` (densities
-        by name, ``"Te"`` and ``"Tg"`` in eV; a previous :class:`GlobalState`
+        by name, ``"Te"`` and ``"Tg"`` in eV; a previous `GlobalState`
         for a continuation) with an implicit method for up to ``t_max``
         seconds, and the end point refined with a root finder. ``converged`` is
         set when every relative rate of change is below ``tolerance`` times the
@@ -683,7 +811,7 @@ class GlobalModel:
         """The states at ``times`` (s) of the balances integrated in time.
 
         The integration starts at ``times[0]`` from ``initial`` (see
-        :meth:`steady_state`) with an implicit method, driven by ``power(t)`` if
+        `steady_state`) with an implicit method, driven by ``power(t)`` if
         that is a function. Stop at every ``breakpoints`` time inside the
         interval, where the drive jumps (the edges of a pulse), so the step
         size does not have to find them.

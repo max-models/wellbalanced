@@ -20,6 +20,7 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
+  "methodcard",
   "numpy",
   "plasmacoll>=0.3.0",
   "scope-profiler>=0.7.5",
@@ -47,6 +48,7 @@ optional-dependencies.docs = [
 ]
 optional-dependencies.spatial = [ "patchwork-amr>=0.2.0", "simgeometry>=0.1.1" ]
 optional-dependencies.test = [
+  "methodcard[symbolic]",
   "opencr",
   "patchwork-amr>=0.2.0",
   "pytest",
@@ -84,6 +86,7 @@ typeCheckingMode = "standard"
 ini_options.pythonpath = [ "src" ]
 ini_options.testpaths = [ "src" ]
 ini_options.addopts = "-ra"
+ini_options.markers = [ "convergence: an order-of-accuracy test of a method card" ]
 
 [tool.coverage]
 run.omit = [ "*/tests/*" ]
@@ -93,6 +96,7 @@ report.show_missing = true
 # PRs to devel test against the devel branches of the max-models packages (pinned in
 # uv.lock); PRs to main and the release use PyPI only (CI sets UV_NO_SOURCES).
 [tool.uv.sources]
+methodcard = { git = "https://github.com/max-models/methodcard", branch = "devel" }
 opencr = { git = "https://github.com/max-models/opencr", branch = "devel" }
 patchwork-amr = { git = "https://github.com/max-models/patchwork", branch = "devel" }
 plasma-plots = { git = "https://github.com/max-models/plasma-plots", branch = "devel" }

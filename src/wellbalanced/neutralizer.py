@@ -3,12 +3,12 @@
 A fast beam of negative ions crosses a channel of length ``L`` and cross section
 ``w h`` filled with gas. On the gas, and on the plasma the beam itself makes,
 the beam changes charge state (``-``, ``0``, ``+``): the fractions along the
-channel follow from :func:`plasmacoll.charge_state_fractions` with the line
+channel follow from `plasmacoll.charge_state_fractions` with the line
 densities ``n_gas z`` and ``n_e z``, where the gas counts the molecules and,
 weighted (``atoms``: ``{name: (weight, ion)}``, e.g. half a molecule each), the
 atoms the plasma dissociates them into. In turn every charge change and every
 ionization of the gas by a fast particle feeds the plasma, which a
-:class:`~wellbalanced.GlobalModel` of the channel balances:
+`wellbalanced.GlobalModel` of the channel balances:
 
 - a transition that frees beam electrons (``- -> 0``, ``- -> +``, ``0 -> +``)
   adds that many fast electrons at the beam velocity, of energy
@@ -19,38 +19,38 @@ ionization of the gas by a fast particle feeds the plasma, which a
 - the ionization of the gas by a fast particle of state ``s`` (cross section
   ``gas_ionization[s]``) makes an ion and a secondary electron of mean
   energy ``secondary_energy[s]``: the mean of its energy distribution, e.g.
-  Rudd's (:class:`plasmacoll.RuddIonization`), at the beam's energy.
+  Rudd's (`plasmacoll.RuddIonization`), at the beam's energy.
 
-The sources are functions of the local beam (:meth:`Neutralizer.beam_sources`):
+The sources are functions of the local beam (`Neutralizer.beam_sources`):
 with a particle flux ``Gamma`` (beam particles per m^2 and s), the fractions
 ``F_s`` of its states and its energy ``E``, a process of cross section
 ``sigma(E)`` on a target of density ``n`` happens at the volume rate
-``Gamma F_s sigma(E) n``: a :class:`~wellbalanced.VolumeSource` per unit target
+``Gamma F_s sigma(E) n``: a `wellbalanced.VolumeSource` per unit target
 density, so a model treats it self-consistently with its own gas and electron
 densities. The global model takes them with the beam's mean flux
 ``N / (w h)`` (``N`` particles per second) and the fractions averaged along the
-channel; a :class:`~wellbalanced.Fluid1D` takes them with profiles across the
+channel; a `wellbalanced.Fluid1D` takes them with profiles across the
 channel. The cross sections are numbers at the beam's energy
-(:class:`BeamData`) or functions of it (:class:`BeamCrossSections`). The gas
+(`BeamData`) or functions of it (`BeamCrossSections`). The gas
 is fed at ``gas_inflow`` and leaves through the two open ends of the channel at
 the free-molecular rate ``2 T (v_mean / 4) w h`` (transmission ``T``), with the
 mean speed at the current gas temperature: gas heating lowers the density.
 
-The gas need not be uniform: a :class:`GasProfile` gives its density along the
+The gas need not be uniform: a `GasProfile` gives its density along the
 channel for a feed (free-molecular flow, so the density scales with the inflow
 and with ``1 / v_mean``), from Knudsen diffusion between the feed and the two
-ends (:meth:`GasProfile.knudsen`) or from a kinetic run, e.g. picnic's
+ends (`GasProfile.knudsen`) or from a kinetic run, e.g. picnic's
 ``NeutralParticleTransport`` with diffuse walls (any arrays). The global model
 then keeps the profile's shape and balances its mean: the pumping speed is the
 inflow over the profile's mean density, the beam crosses the line density of the
 profile, and the beam's sources on the gas take the fractions weighted with it
 (``<F_s n> / <n>``: more stripping where the gas is dense). Every axial slice of
-the channel has its own gas and beam, which :meth:`Neutralizer.local_plasma`
+the channel has its own gas and beam, which `Neutralizer.local_plasma`
 balances slice by slice (the limit of a plasma that does not move along the
 channel; the global model is that of one that mixes completely).
 
 The beam fractions depend on the densities through the line densities, so the
-two are iterated to a fixed point (:meth:`Neutralizer.solve`). The plasma
+two are iterated to a fixed point (`Neutralizer.solve`). The plasma
 target's density is the electron density (equal to the ion density in a
 quasi-neutral plasma); captures on the plasma are not counted as sources.
 Assumptions to check against kinetic runs (``neutralizer_plan.md``, step 4):
@@ -67,6 +67,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 import xarray as xr
+from methodcard import Rule, method
 from plasmacoll import ChargeStateTransitions, charge_state_fractions
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
 from scope_profiler import profile
@@ -101,6 +102,42 @@ E = ELEMENTARY_CHARGE
 STATE_CHARGES = {"-": -1, "0": 0, "+": 1}
 
 
+def _beam_rules() -> dict:
+    """The SymPy rules of `FastBeam` (for the tests)."""
+    import sympy
+
+    energy, mass, current = sympy.symbols("energy mass current", positive=True)
+    me, e = sympy.Float(ELECTRON_MASS), sympy.Float(E)
+    return {
+        "stripped": Rule(
+            me / mass * energy,
+            implementation=lambda energy, mass: (
+                FastBeam(energy, 1.0, mass).stripped_electron_energy
+            ),
+            ranges={"energy": (1.0e4, 1.0e6), "mass": (1.6e-27, 5.1e-27)},
+            rtol=1e-12,
+        ),
+        "particle_rate": Rule(
+            current / e,
+            implementation=lambda current: (
+                FastBeam(1.0e6, current, 3.3e-27).particle_rate
+            ),
+            ranges={"current": (0.1, 50.0)},
+            rtol=1e-12,
+        ),
+    }
+
+
+@method(
+    equations={
+        "stripped": r"E_f = \frac{m_e}{M_b}\, E_b",
+        "particle_rate": r"\dot N_b = \frac{I}{e \sum_s |q_s| F^\mathrm{in}_s} \quad \left(\frac{I}{e} \text{ for a neutral entrance beam}\right)",
+    },
+    assumptions=(
+        r"$E_f$ the energy of an electron moving with the beam: 272 eV for 1 MeV D$^-$",
+    ),
+    symbolic=_beam_rules,
+)
 @dataclass(frozen=True)
 class FastBeam:
     """The incoming beam.
@@ -139,7 +176,7 @@ class FastBeam:
 class SecondaryElectrons(Protocol):
     """Ionization of the gas by a fast particle, with its secondary electrons' energies.
 
-    :class:`plasmacoll.RuddIonization` is one.
+    `plasmacoll.RuddIonization` is one.
     """
 
     def total(self, projectile_energy: float) -> float:
@@ -152,7 +189,7 @@ class SecondaryElectrons(Protocol):
 
 
 #: A cross section (m^2) as a function of the beam energy (eV), e.g. a
-#: :class:`plasmacoll.CrossSection` in the lab frame.
+#: `plasmacoll.CrossSection` in the lab frame.
 CrossSectionFunction = Callable[[np.ndarray], Any]
 
 
@@ -196,12 +233,12 @@ def _evaluate(sigma: float | CrossSectionFunction, energy: float) -> float:
 
 @dataclass(frozen=True)
 class BeamCrossSections:
-    """The beam's cross sections as functions of its energy; :meth:`at` gives :class:`BeamData`.
+    """The beam's cross sections as functions of its energy; `at` gives `BeamData`.
 
     Every cross section is a number (m^2) or a function of the beam energy
-    (eV), e.g. a :class:`plasmacoll.CrossSection` tabulated in the lab frame.
-    The gas ionization may be a :class:`SecondaryElectrons` instead, such as
-    :class:`plasmacoll.RuddIonization` with the beam particle's mass: then the
+    (eV), e.g. a `plasmacoll.CrossSection` tabulated in the lab frame.
+    The gas ionization may be a `SecondaryElectrons` instead, such as
+    `plasmacoll.RuddIonization` with the beam particle's mass: then the
     secondary electrons' mean energy follows the beam energy too.
 
     Attributes:
@@ -239,6 +276,34 @@ class BeamCrossSections:
         )
 
 
+def _knudsen_rules() -> dict:
+    """The SymPy rule of the peak density of `GasProfile.knudsen` (for the tests)."""
+    import sympy
+
+    length, width, height, mass, inflow, temperature = sympy.symbols(
+        "length width height mass inflow temperature", positive=True
+    )
+    area, perimeter = width * height, 2 * (width + height)
+    speed = sympy.sqrt(8 * sympy.Float(E) * temperature / (sympy.pi * mass))
+    diffusivity = sympy.Rational(4, 3) * speed * area / perimeter
+    side = length / 2 / (diffusivity * area) + 2 / (speed * area)
+    rule = inflow * side * side / (side + side)
+
+    def peak(length, width, height, mass, inflow, temperature):
+        profile = GasProfile.knudsen(length, width, height, mass, inflow, temperature)
+        return float(profile.density.max())
+
+    ranges = {
+        "length": (1.0, 4.0),
+        "width": (0.05, 0.2),
+        "height": (0.5, 2.0),
+        "mass": (3.3e-27, 6.7e-27),
+        "inflow": (1.0e20, 1.0e22),
+        "temperature": (0.02, 0.1),
+    }
+    return {"peak": Rule(rule, implementation=peak, ranges=ranges, rtol=1e-12)}
+
+
 @dataclass(frozen=True)
 class GasProfile:
     """The gas density along the channel for a feed of ``inflow`` molecules per second.
@@ -249,7 +314,7 @@ class GasProfile:
     kept, its mean scales. Build it from any profile, e.g. the tally of
     picnic's ``NeutralParticleTransport``
     (``GasProfile(x, density, inflow, temperature)``), or with
-    :meth:`knudsen`.
+    `knudsen`.
 
     Attributes:
         position: Points along the channel (m), increasing, from its entrance
@@ -278,6 +343,20 @@ class GasProfile:
         object.__setattr__(self, "density", n)
 
     @classmethod
+    @method(
+        equations={
+            "flux": r"\Gamma = -D \frac{dn}{dz}, \qquad D = \frac{4}{3}\,\bar v\, \frac{A}{P}, \qquad \bar v = \sqrt{\frac{8 e T}{\pi M}}",
+            "exit": r"\Gamma = \frac{n \bar v}{2} \quad \text{at an open end}",
+            "resistance": r"R_\mathrm{side} = \frac{z_\mathrm{side}}{D A} + \frac{2}{\bar v A}",
+            "peak": r"n_\mathrm{feed} = \dot N\, \frac{R_L R_R}{R_L + R_R}, \qquad \dot N_\mathrm{side} = \frac{n_\mathrm{feed}}{R_\mathrm{side}}",
+        },
+        assumptions=(
+            r"free-molecular flow: the density is linear on either side of the feed and scales with $\dot N$ and $1/\bar v$",
+            r"Knudsen's long-duct diffusivity ($A = wh$, $P = 2(w + h)$) by default; Marshak's exit condition",
+            r"picnic's kinetic runs give 0.81 of the slot value at 10 widths and 1.0 at 30 (docstring, not checked here)",
+        ),
+        symbolic=_knudsen_rules,
+    )
     def knudsen(
         cls,
         length: float,
@@ -305,7 +384,7 @@ class GasProfile:
         fed in the middle, gives 0.81 of Knudsen's slot value ``(2/3) v_mean w``
         for a channel 10 widths long and 1.0 for 30, and Marshak's exit density
         within 8%. In 3D, in the 3 m x 0.1 m x 1.7 m channel of
-        :func:`illustrative_deuterium_neutralizer` fed in the middle, it has the
+        `illustrative_deuterium_neutralizer` fed in the middle, it has the
         same peak, a 10% smaller slope and an 8% lower mean density than this
         model; pass its profile to use it instead.
 
@@ -548,6 +627,17 @@ class Neutralizer:
         """The channel cross section ``w h`` (m^2)."""
         return self.width * self.height
 
+    @method(
+        equations={
+            "uniform": r"S_p = 2\,\tau\, \frac{\bar v}{4}\, w h, \qquad \bar v = \sqrt{\frac{8 e T_g}{\pi M}}",
+            "profile": r"S_p = \frac{\dot N_\mathrm{in}}{\langle n\rangle} \sqrt{\frac{T_g}{T_\mathrm{prof}}}",
+        },
+        assumptions=(
+            r"free-molecular outflow through the two open ends with the transmission $\tau$ (uniform gas)",
+            r"with a `GasProfile`: its inflow over its mean density, scaled with the mean speed",
+        ),
+        components=(GasProfile.knudsen,),
+    )
     def pumping_speed(self, gas_temperature: float) -> float:
         """Volume per second (m^3/s) leaving through both ends at the gas temperature (eV).
 
@@ -598,6 +688,18 @@ class Neutralizer:
         atoms = self.gas_target_density(densities) - densities[self.gas]
         return densities[self.gas] * self.gas_shape(z) + atoms
 
+    @method(
+        equations={
+            "rate_equations": r"\frac{dF_s}{dz} = \sum_{t} n_t(z) \sum_{s' \ne s} \left(\sigma^t_{s's} F_{s'} - \sigma^t_{ss'} F_s\right), \qquad F(0) = F^\mathrm{in}",
+            "line_density": r"\pi_\mathrm{gas}(z) = \langle n_\mathrm{gas}\rangle \int_0^z \frac{n_\mathrm{gas}(z')}{\langle n_\mathrm{gas}\rangle} dz' + n_\mathrm{atoms} z, \qquad \pi_\mathrm{plasma}(z) = n_e z",
+            "means": r"\langle F_s\rangle = \frac{1}{L}\int_0^L F_s\, dz, \qquad \langle F_s\rangle_\mathrm{gas} = \frac{\langle F_s n\rangle}{\langle n\rangle}",
+        },
+        assumptions=(
+            r"plasmacoll's `charge_state_fractions` on the line densities; the integrals by the trapezoidal rule on `points` positions",
+            r"the atoms weighted by their `atoms` weight, uniform along the channel like the plasma",
+            r"the plasma target's density is $n_e$ (standing for the ion density)",
+        ),
+    )
     def fractions(
         self, gas_density: float, plasma_density: float, atom_density: float = 0.0
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -641,6 +743,19 @@ class Neutralizer:
         """The beam's sources for the plasma, with the fractions averaged along the channel."""
         return self.beam_sources(self.mean_flux, mean, gas_fractions=gas_mean)
 
+    @method(
+        equations={
+            "rate": r"S = \Gamma_b F_s\, w_g \sigma(E_b)\, n_\mathrm{target}",
+            "stripping": r"s \to s',\ \Delta q = q_{s'} - q_s > 0: \quad \delta n_e = +\Delta q, \qquad \varepsilon_e = \Delta q\, f\, \frac{m_e}{M_b} E_b",
+            "capture": r"\Delta q < 0 \text{ on gas } g: \quad \delta n_g = \Delta q, \quad \delta n_{g^+} = -\Delta q, \quad \varepsilon_e = 0",
+            "gas_ionization": r"\delta n_g = -1,\ \delta n_{g^+} = +1,\ \delta n_e = +1, \qquad \varepsilon_e = \varepsilon_\mathrm{sec}(s)",
+        },
+        assumptions=(
+            r"$\Gamma_b$ the beam particle flux, $F_s$ the fraction in state $s$; $g$ the fed gas ($w_g = 1$) and every `atoms` entry",
+            r"captures on the plasma are not sources; a source is skipped where $\sigma \le 0$ or no beam is in state $s$",
+            r"$f$ = `fast_electron_deposition`; $\varepsilon_\mathrm{sec}$ the data's mean secondary energy, else `secondary_energy`",
+        ),
+    )
     def beam_sources(
         self,
         flux: float | np.ndarray,
@@ -653,7 +768,7 @@ class Neutralizer:
         Args:
             flux: Beam particles per m^2 and s, all states together: a number,
                 or an array along a coordinate (the cells of a
-                :class:`~wellbalanced.Fluid1D`).
+                `wellbalanced.Fluid1D`).
             fractions: The fractions of the states (in the order of the data's
                 states), ``(states,)`` or ``(points, states)`` with ``points``
                 matching ``flux``.
@@ -662,7 +777,7 @@ class Neutralizer:
                 they differ (the global model's, weighted with the gas profile).
 
         Returns:
-            One :class:`~wellbalanced.VolumeSource` per process, its rate per
+            One `wellbalanced.VolumeSource` per process, its rate per
             unit density of its target (a number, or an array like ``flux``).
         """
         energy = self.beam.energy if energy is None else float(energy)
@@ -782,6 +897,19 @@ class Neutralizer:
     # -- solving --------------------------------------------------------------------
 
     @profile("wellbalanced.Neutralizer.solve", tags=_PROFILE_TAGS)
+    @method(
+        equations={
+            "fixed_point": r"\langle F\rangle^{k+1} = (1 - r)\langle F\rangle^k + r\, \langle F\rangle\!\left(n^{k}_\mathrm{gas}, n^{k}_e\right), \qquad n^{k} = \text{steady state of the channel's } \texttt{GlobalModel}(\langle F\rangle^k)",
+            "stop": r"\max_s \left|\Delta\langle F_s\rangle\right| < \text{tolerance} \ \text{ and the plasma converged}",
+            "chamber": r"V = L w h, \qquad A_w = 2L(w + h), \qquad A_\mathrm{loss} = 2wh \ (\text{cusps}) \text{ or } 2L(w + h) + 2wh",
+        },
+        assumptions=(
+            r"$r$ = `relaxation` (0.5), tolerance $10^{-6}$, at most `max_iterations` (200) passes",
+            r"the start: no plasma, the gas density $\dot N / S_p(T_g)$; pumping at the previous pass's $T_g$",
+            r"the limit of complete mixing along the channel; `local_plasma` is that of no mixing",
+        ),
+        components=(fractions, beam_sources, pumping_speed),
+    )
     def solve(self, guess: GlobalState | None = None) -> NeutralizerResult:
         """Iterate the beam fractions and the plasma to a fixed point."""
         tg = (
@@ -841,11 +969,22 @@ class Neutralizer:
             plasma_potential=model.plasma_potential(state),
         )
 
+    @method(
+        equations={
+            "slice": r"\text{a } \texttt{GlobalModel} \text{ per metre at each } z_k: \quad V = wh, \quad A_w = 2(w + h), \quad n_\mathrm{gas}(z_k) = n_\mathrm{gas}\, \frac{n(z_k)}{\langle n\rangle}",
+            "sources": r"S_k = \Gamma_b\, F_s(z_k)\, \sigma\, n, \qquad L_c \to \frac{L_c}{L} \text{ with cusps}",
+        },
+        assumptions=(
+            r"neutrals held at their local densities, $T_g$ the converged one; ions leave through the side walls only",
+            r"wall reactions are not passed (the neutrals are fixed)",
+        ),
+        components=(solve,),
+    )
     def local_plasma(self, result: NeutralizerResult, points: int = 31) -> xr.Dataset:
         """The plasma of every axial slice in its own gas and beam (``position``).
 
         The limit of a plasma that does not move along the channel, opposite
-        to the global model's complete mixing: a :class:`GlobalModel` per
+        to the global model's complete mixing: a `GlobalModel` per
         metre of channel at each of ``points`` positions, its neutrals held at
         their densities there (the fed gas with its profile, the atoms at the
         global model's), at the converged gas temperature, with the beam's
@@ -951,7 +1090,7 @@ def illustrative_deuterium_neutralizer(**overrides: Any) -> Neutralizer:
     1.4e20 m^-2 and a plasma target more: placeholders that let the model run
     and the tests check it, until real data are supplied (beam stripping:
     e.g. the ORNL Redbook, IAEA ALADDIN; plasma reactions: Janev et al.). It
-    warns when called. ``overrides`` replace fields of the :class:`Neutralizer`.
+    warns when called. ``overrides`` replace fields of the `Neutralizer`.
     """
     warnings.warn(
         "illustrative_deuterium_neutralizer uses placeholder cross sections and "

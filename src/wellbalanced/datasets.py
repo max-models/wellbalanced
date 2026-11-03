@@ -3,7 +3,7 @@
 Every result has a ``to_dataset()``: named dimensions (``species``, ``reaction``,
 ``channel``, ``x``, ``state``), coordinates, and on every variable its
 ``long_name`` and ``units``, which plotting libraries such as plasma-plots and
-xarray's own ``.plot`` put on the axes. :func:`stack` joins the results of a
+xarray's own ``.plot`` put on the axes. `stack` joins the results of a
 scan along the scanned parameter.
 """
 
@@ -42,7 +42,7 @@ def stack(
     """The datasets of a scan joined along the scanned parameter.
 
     Args:
-        results: The results, e.g. of :meth:`GlobalModel.scan`.
+        results: The results, e.g. of `GlobalModel.scan`.
         dim: The name of the new dimension, e.g. ``"power"``.
         values: The parameter's value of every result.
         long_name: Its label; ``dim`` if ``None``.

@@ -1,8 +1,8 @@
 """Cut cells of a conductor on the edge grid: what of every edge and face is outside it.
 
 The geometry of the surface-impedance conductors of
-:class:`~wellbalanced.spatial.inductive3d.InductiveField3D`, in the numbering of an
-:class:`~wellbalanced.spatial.edges.EdgeGrid`:
+`wellbalanced.spatial.inductive3d.InductiveField3D`, in the numbering of an
+`wellbalanced.spatial.edges.EdgeGrid`:
 
 - ``edge_air``: the fraction of every edge's length outside the conductor;
 - ``face_air``: the fraction of every face's area outside;
@@ -15,16 +15,16 @@ The geometry of the surface-impedance conductors of
 
 Two ways to get them:
 
-- :func:`cut_cells`: conformal, from simgeometry's
-  :func:`~simgeometry.fractions.yee_fractions` (exact for planes, second order for
+- `cut_cells`: conformal, from simgeometry's
+  `simgeometry.fractions.yee_fractions` (exact for planes, second order for
   curved surfaces; a slit narrower than a cell keeps its gap). The width is
   ``trace^2 / projected trace`` (``trace / sin(theta)`` for a straight trace), with
   ``sin(theta)`` bounded below by ``min_sine``.
-- :func:`staircased_cells`: a cell is metal when its centre is inside; the surface is the
+- `staircased_cells`: a cell is metal when its centre is inside; the surface is the
   faces between metal and air cells. An edge or face touching a metal cell is in the
   metal, and an air face's width is the length of its edges on the surface.
 
-simgeometry is imported by :func:`cut_cells` only.
+simgeometry is imported by `cut_cells` only.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ from functools import reduce
 from typing import Any
 
 import numpy as np
+from methodcard import method
 
 from wellbalanced.spatial.edges import EdgeGrid
 
@@ -68,6 +69,18 @@ def _simgeometry_grid(grid: EdgeGrid):
     )
 
 
+@method(
+    equations={
+        "fractions": r"\text{edge\_air} = 1 - f_e, \qquad \text{face\_air} = 1 - f_f \quad (\text{simgeometry's } \texttt{yee\_fractions})",
+        "width": r"w_f = \frac{\text{trace}}{\max(\sin\theta, \text{min\_sine})}, \qquad \sin\theta = \frac{\text{projected trace}}{\text{trace}}",
+    },
+    assumptions=(
+        r"exact for planes, second order for curved surfaces; a slit narrower than a cell keeps its gap",
+        r"$w_f = \text{trace}^2/\text{projected}$ while $\sin\theta \ge 0.1$; the bound keeps the matrix moderate",
+        r"staircased cells (`staircased_cells`) make the surface too long ($4/\pi$ for a circle) and the loss does not converge",
+    ),
+    references=("Dey and Mittra (conformal cut faces)",),
+)
 def cut_cells(
     grid: EdgeGrid,
     shapes: Sequence[Any],

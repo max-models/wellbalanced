@@ -11,8 +11,8 @@ vector potential, ``a = A_z(x, y)`` in a cut or ``a = A_phi(r, z)`` in r–z:
 
 with ``B = (d_y A_z, -d_x A_z)`` in the cut and ``B = (-d_z A_phi, (1/r) d_r (r A_phi))``
 in r–z. The grid, its metric and the operator are the grid's: a tensor
-:class:`~wellbalanced.spatial.grid.CellGrid` (from cell edges), or the refined patches of a
-:class:`~wellbalanced.spatial.patches.PatchGrid` (``grid=``), where fields are arrays over
+`wellbalanced.spatial.grid.CellGrid` (from cell edges), or the refined patches of a
+`wellbalanced.spatial.patches.PatchGrid` (``grid=``), where fields are arrays over
 the leaf cells.
 
 Plasma, in one of two forms:
@@ -33,11 +33,11 @@ Plasma, in one of two forms:
   an assumption until the boundary conditions of the model (Zielke's thesis) are in.
   The RF Lorentz force in this equation, ``F_L = -e u_in-plane x B`` of the in-plane
   electron drift, is zero here (the drift is far slower than ``u``); the in-plane force
-  the RF motion feels, ``-(e/2) Re(u x B*)``, is :attr:`InductiveSolution.lorentz_force`,
-  which :class:`~wellbalanced.spatial.fluid.Fluid2D` takes.
+  the RF motion feels, ``-(e/2) Re(u x B*)``, is `InductiveSolution.lorentz_force`,
+  which `wellbalanced.spatial.fluid.Fluid2D` takes.
 
 The electron density, temperature and collision frequency are prescribed; a
-:class:`~wellbalanced.spatial.regions.PlasmaRegion` sets the density to zero outside the
+`wellbalanced.spatial.regions.PlasmaRegion` sets the density to zero outside the
 plasma.
 
 Coil: every winding is a region (the tube's cross-section, say) carrying the coil
@@ -78,6 +78,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import xarray as xr
+from methodcard import ConvergenceProblem, Rule, method
 from plasmacoll.constants import ELECTRON_MASS, ELEMENTARY_CHARGE
 from scipy.constants import mu_0 as MU_0
 
@@ -110,7 +111,7 @@ class Winding:
     """One coil winding: a region carrying ``sign`` times the coil current.
 
     Attributes:
-        shape: A 2D shape with ``contains_points`` (e.g. a :class:`simgeometry.Circle`
+        shape: A 2D shape with ``contains_points`` (e.g. a `simgeometry.Circle`
             of the tube's radius).
         sign: The direction of the current: ``+1`` or ``-1`` (the two sides of a
             driver in a cut carry opposite signs), or a turn count.
@@ -131,7 +132,7 @@ class Conductor:
         floating: ``False`` (grounded, the default): ``a = 0`` inside, the value of the
             far boundary, any net current. ``True`` (in a cut only): one uniform unknown
             ``A_z`` and zero net current, a closed loop of plates.
-        name: A label for :attr:`InductiveSolution.conductor_currents`.
+        name: A label for `InductiveSolution.conductor_currents`.
     """
 
     shapes: Sequence[Any]
@@ -139,9 +140,22 @@ class Conductor:
     name: str = ""
 
 
+@method(
+    equations={
+        "fields": r"E = -i\omega a, \qquad J = \sigma E \ (\text{cold}), \quad J = -e n_e u \ (\text{viscous})",
+        "power": r"P = \sum_\mathrm{cells} \tfrac12\mathrm{Re}(J E^*)\, dV = \mathrm{Re}\left(-\tfrac12\sum E J_\mathrm{coil}^*\, dV\right)",
+        "resistance": r"R_p = \frac{2P}{|I|^2}, \qquad \eta = \frac{R_p}{R_p + R_\mathrm{net}}, \qquad |I| = \sqrt{\frac{P\,|I_1|^2}{P_1}} \ (\texttt{for\_power})",
+        "lorentz": r"\mathbf F = -\frac{e}{2}\mathrm{Re}\left(u\,\hat{\mathbf n}\times\mathbf B^*\right) = \begin{cases}\left(\tfrac e2\mathrm{Re}(u B_y^*),\ -\tfrac e2\mathrm{Re}(u B_x^*)\right) & \text{cut} \\ \left(-\tfrac e2\mathrm{Re}(u B_z^*),\ \tfrac e2\mathrm{Re}(u B_r^*)\right) & r\text{–}z\end{cases}",
+        "friction": r"P_\nu = \tfrac12\sum n_e m_e \nu |u|^2\, dV, \qquad P_\mu = \tfrac12\mathrm{Re}(u^H K_\mu u)",
+    },
+    assumptions=(
+        r"amplitudes of $e^{i\omega t}$; volumes and powers are totals in r–z and per metre in a cut (a device's power is `depth` times it)",
+        r"the conductors are lossless, so the absorbed power equals the active power of the windings",
+    ),
+)
 @dataclass(frozen=True)
 class InductiveSolution:
-    """The time-harmonic field of :meth:`InductiveField2D.solve`, as complex amplitudes.
+    """The time-harmonic field of `InductiveField2D.solve`, as complex amplitudes.
 
     The instant value of an amplitude ``X`` is ``Re(X exp(i omega t))``. Extensive
     quantities are totals in r–z and per unit length along ``z`` in a cut.
@@ -237,7 +251,7 @@ class InductiveSolution:
 
     @property
     def friction_power(self) -> float:
-        """The part of :attr:`absorbed_power` the friction with the gas dissipates."""
+        """The part of `absorbed_power` the friction with the gas dissipates."""
         if self.electron_velocity is None:
             return self.absorbed_power
         friction = (
@@ -253,7 +267,7 @@ class InductiveSolution:
     def source_power(self) -> complex:
         """The complex power the windings deliver [W] (per unit length in a cut).
 
-        ``-1/2 sum E J_coil* dV``; its real part equals :attr:`absorbed_power`, its
+        ``-1/2 sum E J_coil* dV``; its real part equals `absorbed_power`, its
         imaginary part is the reactive power, positive for the inductive load.
         """
         e = self.electric_field
@@ -367,6 +381,27 @@ class InductiveState:
     coil_current: float
 
 
+@method(
+    equations={
+        "field": r"\nabla\times\nabla\times a = \mu_0 (J_\mathrm{coil} + J_\mathrm{plasma}), \qquad E = -i\omega a, \qquad a = A_z(x, y) \text{ or } A_\phi(r, z)",
+        "cold": r"J = \sigma E, \qquad \sigma = \frac{n_e e^2}{m_e(\nu + i\omega)}",
+        "viscous": r"i\omega n_e m_e u + n_e m_e \nu u + \nabla\times(\mu_e\nabla\times u) = -n_e e E, \qquad \mu_e = \tfrac23\frac{n_e e T_e}{\nu}, \qquad J = -e n_e u",
+        "cold_system": r"P^T\left(K + i\omega\mu_0\,\mathrm{diag}(\sigma V)\right) P\, a = P^T \mu_0 V J_\mathrm{coil}",
+        "viscous_system": r"\begin{pmatrix} K & \mu_0 V e n_e \\ -i\omega V n_e e & V n_e m_e(i\omega + \nu) + K_\mu \end{pmatrix}\begin{pmatrix} a \\ u \end{pmatrix} = \begin{pmatrix} \mu_0 V J_\mathrm{coil} \\ 0 \end{pmatrix}",
+        "coil": r"J_\mathrm{coil} = \mathrm{sign}\cdot\frac{I}{A_\mathrm{winding}} \text{ on each winding's cells}",
+    },
+    assumptions=(
+        r"magnetoquasistatic: no displacement current (the vacuum wavelength at 1–2 MHz is far larger than the source)",
+        r"perfect conductors: grounded ($a = 0$) or, in a cut, floating (one shared unknown, zero net current); $P$ the projection to the unknowns",
+        r"viscous electrons do not slip at the plasma's edge ($u = 0$); the RF Lorentz force of the in-plane drift is not in the momentum balance",
+        r"$n_e$, $\nu$ and $T_e$ prescribed; zero viscosity reproduces the cold plasma; one complex LU per frequency",
+    ),
+    references=(
+        "[Zielke et al., Plasma Sources Sci. Technol. 31, 035019 (2022)](https://doi.org/10.1088/1361-6595/ac5845), eqs. 3-10",
+        "[Zielke et al., NIBS'22, arXiv:2211.10143](https://arxiv.org/abs/2211.10143)",
+    ),
+    components=(CellGrid.curl_curl, CellGrid.curl, InductiveSolution),
+)
 class InductiveField2D:
     """The magnetoquasistatic field of coil windings, conductors and a plasma.
 
@@ -385,15 +420,15 @@ class InductiveField2D:
         electron_viscosity: ``mu_e`` [Pa s] directly, instead of from ``T_e``; zero gives
             the momentum balance without viscosity (the cold plasma, solved with ``u``).
         plasma_region: Where the plasma is; everywhere if ``None``.
-        boundaries: The boundary of each axis (see :class:`CellGrid`); default
+        boundaries: The boundary of each axis (see `CellGrid`); default
             ``("dirichlet", "dirichlet")``, or the grid's.
         geometry: ``"cartesian"`` (a cut, ``A_z``) or ``"cylindrical"`` (r–z,
             ``A_phi``); default ``"cartesian"``, or the grid's.
         electron_drift: The in-plane electron velocity for the RF Lorentz force in the
             momentum balance; not implemented (the drift of
-            :class:`~wellbalanced.spatial.fluid.Fluid2D` is far slower than ``u``).
+            `wellbalanced.spatial.fluid.Fluid2D` is far slower than ``u``).
         grid: A grid instead of the edges, e.g. a
-            :class:`~wellbalanced.spatial.patches.PatchGrid` (its geometry and
+            `wellbalanced.spatial.patches.PatchGrid` (its geometry and
             boundaries are the model's).
     """
 
@@ -718,6 +753,76 @@ class InductiveField2D:
         return (2.0 / dt) * np.tan(0.5 * omega * dt) / (2.0 * np.pi)
 
 
+def _stepper_rules() -> dict:
+    """The SymPy rule of the modified frequency of `InductiveTimeStepper` (for the tests)."""
+    import sympy
+
+    f, dt = sympy.symbols("frequency dt", positive=True)
+    rule = (2 / dt) * sympy.tan(sympy.pi * f * dt) / (2 * sympy.pi)
+    return {
+        "modified_frequency": Rule(
+            rule,
+            implementation=InductiveField2D.modified_frequency,
+            ranges={"frequency": (0.5e6, 2.0e6), "dt": (1.0e-9, 5.0e-8)},
+        )
+    }
+
+
+def _stepper_problem() -> ConvergenceProblem:
+    """A plasma slab between two windings, driven by ``sin^2(pi f t)`` for one period.
+
+    The field and the plasma current at the end against a run with 32 times smaller
+    steps; the drive starts smoothly from rest.
+    """
+    from simgeometry import Rectangle
+
+    frequency = 1.0e6
+    edges = np.linspace(-0.03, 0.03, 13)
+    model = InductiveField2D(
+        edges,
+        edges,
+        frequency=frequency,
+        windings=[
+            Winding(Rectangle((-0.02, 0.0), (0.006, 0.006)), 1.0),
+            Winding(Rectangle((0.02, 0.0), (0.006, 0.006)), -1.0),
+        ],
+        electron_density=lambda x, y: np.where(np.abs(x) < 0.012, 1.0e16, 0.0),
+        collision_frequency=1.0e7,
+    )
+
+    def run(steps: int) -> np.ndarray:
+        dt = 1.0 / (frequency * steps)
+        stepper = model.time_stepper(dt)
+        state = stepper.initial_state()
+        for n in range(1, steps + 1):
+            state = stepper.step(state, np.sin(np.pi * frequency * n * dt) ** 2)
+        a, j = state.vector_potential, state.plasma_current_density
+        return np.concatenate([a / np.abs(a).max(), j / np.abs(j).max()])
+
+    reference = run(2048)
+
+    def error(h: float) -> float:
+        return float(np.max(np.abs(run(round(1.0 / h)) - reference)))
+
+    return ConvergenceProblem(error, steps=[1 / 16, 1 / 32, 1 / 64])
+
+
+@method(
+    equations={
+        "current": r"J^{n+1}\left(1 + \frac{\nu\Delta t}{2}\right) = J^n\left(1 - \frac{\nu\Delta t}{2}\right) - \epsilon\,(a^{n+1} - a^n), \qquad \epsilon = \frac{n_e e^2}{m_e}",
+        "field": r"\left(K + \frac{\mu_0 V\epsilon}{1 + \nu\Delta t/2}\right) a^{n+1} = \mu_0 V\left(J_\mathrm{coil}^{n+1} + \frac{J^n(1 - \nu\Delta t/2) + \epsilon a^n}{1 + \nu\Delta t/2}\right)",
+        "electric": r"E^{n+1} = -\frac{2(a^{n+1} - a^n)}{\Delta t} - E^n",
+        "modified_frequency": r"\omega' = \frac{2}{\Delta t}\tan\frac{\omega\Delta t}{2}",
+    },
+    order=2,
+    assumptions=(
+        r"the trapezoidal rule for $\partial_t J = \epsilon E - \nu J$, $E = -\partial_t a$, with Ampère's law at the new time; one real LU for all steps",
+        r"its periodic steady state is the harmonic solution at $\omega'$; cold plasma only",
+        r"the order is that of the field and the current after one period of a smooth drive",
+    ),
+    symbolic=_stepper_rules,
+    problem=_stepper_problem,
+)
 class InductiveTimeStepper:
     """Trapezoidal steps of the plasma current with Ampere's law at the new time.
 

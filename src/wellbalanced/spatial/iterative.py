@@ -1,7 +1,7 @@
 """An iterative solver for the edge field: COCG with an auxiliary-space preconditioner.
 
 For the complex symmetric systems ``A a = j`` of
-:class:`~wellbalanced.spatial.inductive3d.InductiveField3D` on grids where a sparse LU is
+`wellbalanced.spatial.inductive3d.InductiveField3D` on grids where a sparse LU is
 too slow (its cost grows as the square of the unknowns). The preconditioner is Hiptmair
 and Xu's auxiliary-space one (SIAM J. Numer. Anal. 45, 2483, 2007; hypre's AMS, Kolev and
 Vassilevski, J. Comput. Math. 27, 604, 2009) in its additive form,
@@ -28,6 +28,7 @@ from dataclasses import dataclass
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+from methodcard import method
 
 from wellbalanced.spatial.edges import EdgeGrid
 
@@ -130,6 +131,22 @@ class _Multigrid:
         return self._cycle(0, rhs)
 
 
+@method(
+    equations={
+        "preconditioner": r"B = S^{-1} + G\,(G^T A_r G)^{-1} G^T + P\,(P^T A_r P)^{-1} P^T",
+        "surrogate": r"A_r = C^T\mathrm{diag}|\kappa_f|\, C + \mathrm{diag}|m_e|",
+        "interpolation": r"(P\mathbf u)_e = \ell_e\,\mathbf t_e\cdot\frac{\mathbf u_i + \mathbf u_j}{2}",
+    },
+    assumptions=(
+        r"$S$ l1-Jacobi; $G$ the gradient of the nodes all of whose edges are unknowns; $\ell_e$ the edge's air length",
+        r"each auxiliary inverse one geometric multigrid V-cycle (linear prolongation, Galerkin, 2 + 2 l1-Jacobi sweeps, LU below 3000 unknowns)",
+        r"$B$ real symmetric, as COCG needs",
+    ),
+    references=(
+        "[Hiptmair and Xu, SIAM J. Numer. Anal. 45, 2483 (2007)](https://doi.org/10.1137/060660588)",
+        "Kolev and Vassilevski, J. Comput. Math. 27, 604 (2009)",
+    ),
+)
 class AuxiliarySpacePreconditioner:
     """Hiptmair and Xu's additive auxiliary-space preconditioner on an edge grid.
 
@@ -198,7 +215,7 @@ class AuxiliarySpacePreconditioner:
 
 @dataclass(frozen=True)
 class IterativeResult:
-    """The outcome of :func:`cocg`.
+    """The outcome of `cocg`.
 
     Attributes:
         solution: The solution.
@@ -213,6 +230,20 @@ class IterativeResult:
     converged: bool
 
 
+@method(
+    equations={
+        "step": r"q = A p, \qquad \alpha = \frac{\rho}{p^T q}, \qquad x \leftarrow x + \alpha p, \qquad r \leftarrow r - \alpha q",
+        "direction": r"z = B r, \qquad \rho' = r^T z, \qquad p \leftarrow z + \frac{\rho'}{\rho} p",
+        "stop": r"\frac{\|r\|_2}{\|b\|_2} \le \text{tolerance}",
+    },
+    assumptions=(
+        r"$A$ complex symmetric and $B$ symmetric: CG with the bilinear $x^T y$ in place of $x^H y$",
+    ),
+    references=(
+        "[van der Vorst and Melissen, IEEE Trans. Magn. 26, 706 (1990)](https://doi.org/10.1109/20.106415)",
+    ),
+    components=(AuxiliarySpacePreconditioner,),
+)
 def cocg(
     matrix: sp.spmatrix,
     rhs: np.ndarray,

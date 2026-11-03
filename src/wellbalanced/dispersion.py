@@ -3,13 +3,13 @@
 The first instability of a magnetron's ionisation region (and of a Hall thruster's channel) is
 the gradient-drift instability: magnetised electrons convected by ``E x B`` along a density
 gradient, unmagnetised ions accelerated by the perturbed field. The cold-ion fluid version is
-in :func:`wellbalanced.driftfluid2d.boeuf_dispersion_roots` and
-:func:`wellbalanced.driftfluid2d.gradient_drift_roots`. This module adds what those cannot
+in `wellbalanced.driftfluid2d.boeuf_dispersion_roots` and
+`wellbalanced.driftfluid2d.gradient_drift_roots`. This module adds what those cannot
 resolve:
 
 - **kinetic ions**: the cold-ion mode has a lab-frame phase speed of a few 100 m/s, inside
   the thermal spread of room-temperature ions, so ion Landau damping and the Doppler shift of
-  the ion flow set its real frequency (:class:`KineticIons`);
+  the ion flow set its real frequency (`KineticIons`);
 - **the compressibility of the drifts** in an inhomogeneous ``B``: for the 2D model field
   ``B(x) z`` of the planar simulations the ``E x B`` flow diverges as ``-v_x B'/B``; for a
   curl-free (vacuum) field the factor is 2, which is what a 3D arch adds to the 2D plane
@@ -18,7 +18,7 @@ resolve:
   ``1 + k^2 rho_e^2`` of Boeuf's relation), with the equilibrium flow shear;
 - **Poisson or quasineutral** closure, an ionisation source, and a scan along a 1D profile.
 
-Geometry and signs follow :mod:`wellbalanced.driftfluid2d`: ``x`` across the field (toward
+Geometry and signs follow `wellbalanced.driftfluid2d`: ``x`` across the field (toward
 the anode), ``y`` along ``E x B`` for ``E_0 < 0`` and ``B > 0``, ``z`` along ``B``;
 perturbations ``exp(i (k_x x + k_y y) - i omega t)``, so ``Im omega > 0`` grows and
 ``Re omega / k_y`` is the phase speed along ``+y``. Gradient lengths are signed, ``L = f / f'``,
@@ -30,13 +30,13 @@ magnetron), a **lower-hybrid** branch (``Re omega ~ omega_LH = sqrt(omega_ce ome
 growth, present wherever the gradient-drift mode is not), and at weak ``B`` **electron-scale**
 roots (``Re omega ~ 0.3 omega_ce``, ``gamma ~ 1e7-1e8`` /s, the Buneman/cyclotron-drift family
 of the cold momentum balance with Poisson's equation) which are outside the drift ordering and
-below any PIC grid of interest. :meth:`LocalRoots.drift` keeps the roots of the drift ordering,
+below any PIC grid of interest. `LocalRoots.drift` keeps the roots of the drift ordering,
 ``|Re omega| < 0.3 k_y v_E`` and ``|Im omega| < 0.02 omega_ce``, and ``scan`` and ``scan_profile``
 follow that branch by default (``branch="drift"``; ``"fastest"`` takes the fastest root of all),
 returning every root as well.
 
 Where the two models can be compared (uniform ``B``, no collisions, Poisson) the roots agree
-with :func:`~wellbalanced.driftfluid2d.boeuf_dispersion_roots` to better than 0.1 %. With a
+with `wellbalanced.driftfluid2d.boeuf_dispersion_roots` to better than 0.1 %. With a
 ``B`` gradient they do not: Boeuf's relation carries the grad-B frequency
 ``omega_D = -2 k T_e / (B L_B)`` in both its Doppler shift and its drive, while the drift
 fluid in the model field ``B(x) z`` gives half of it (``div(E x B / B^2) = -2 v . grad B / B
@@ -53,6 +53,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import xarray as xr
+from methodcard import Rule, method
 from plasmacoll.constants import ATOMIC_MASS, ELECTRON_MASS, ELEMENTARY_CHARGE
 from scipy.special import wofz
 
@@ -71,10 +72,36 @@ EPSILON_0 = 8.8541878128e-12
 ARGON_MASS = 39.948 * ATOMIC_MASS - ELECTRON_MASS
 
 
+def _dispersion_function_rules() -> dict:
+    """The SymPy rule of `plasma_dispersion_function` on the real axis (for the tests)."""
+    import sympy
+
+    zeta = sympy.Symbol("zeta", real=True)
+    rule = -sympy.sqrt(sympy.pi) * sympy.exp(-(zeta**2)) * sympy.erfi(zeta)
+    return {
+        "real_axis": Rule(
+            rule,
+            implementation=lambda zeta: np.real(plasma_dispersion_function(zeta)),
+            ranges={"zeta": (-4.0, 4.0)},
+        )
+    }
+
+
+@method(
+    equations={
+        "dispersion_function": r"Z(\zeta) = i\sqrt\pi\, w(\zeta) = i\sqrt\pi\, e^{-\zeta^2}\,\mathrm{erfc}(-i\zeta)",
+        "real_axis": r"\mathrm{Re}\,Z(x) = -\sqrt\pi\, e^{-x^2}\,\mathrm{erfi}(x) \quad (x \text{ real})",
+        "asymptotic": r"Z(\zeta) \approx -\frac{1}{\zeta}\left(1 + \frac{1}{2\zeta^2} + \frac{3}{4\zeta^4}\right) \quad (|\zeta| > 30)",
+    },
+    assumptions=(
+        r"`scipy.special.wofz`, the analytic continuation to $\mathrm{Im}\,\zeta < 0$; the asymptotic series drops the $e^{-\zeta^2}$ term of the lower half-plane",
+    ),
+    symbolic=_dispersion_function_rules,
+)
 def plasma_dispersion_function(zeta: complex | np.ndarray) -> complex | np.ndarray:
     """``Z(zeta) = i sqrt(pi) w(zeta)``, the plasma dispersion function, on the whole plane.
 
-    ``w`` is the Faddeeva function (:func:`scipy.special.wofz`), which is the analytic
+    ``w`` is the Faddeeva function (`scipy.special.wofz`), which is the analytic
     continuation of ``Z`` to ``Im zeta < 0``, so damped roots are found as well as growing
     ones. Beyond ``|zeta| = 30`` the asymptotic series ``-1/zeta (1 + 1/(2 zeta^2) + 3/(4
     zeta^4))`` is used without the ``exp(-zeta^2)`` term of the lower half-plane, which
@@ -170,6 +197,15 @@ class ColdIons:
         return (div - plasma.ionization_frequency * a_e) / (1j * (omega - kv))
 
 
+@method(
+    equations={
+        "response": r"\frac{\delta n_i}{n_0} = -\frac{e\,\delta\phi}{T_i}\big[1 + \zeta Z(\zeta)\big], \qquad \zeta = \frac{\omega - \mathbf k\cdot\mathbf v_0}{\sqrt2\, k v_{ti}}, \qquad v_{ti} = \sqrt{\frac{e T_i}{M}}",
+    },
+    assumptions=(
+        r"Maxwellian unmagnetised ions: Landau resonance and the Doppler shift of the flow; no collisions, no gradient convection, no source",
+    ),
+    components=(plasma_dispersion_function,),
+)
 @dataclass(frozen=True)
 class KineticIons:
     """Maxwellian unmagnetised ions: ``mass`` (kg), ``temperature`` (eV), flow ``(v_0x, v_0y)``.
@@ -245,6 +281,22 @@ def _select_branch(roots: LocalRoots, plasma: Plasma, branch: str) -> LocalRoots
     raise ValueError("branch is 'drift' or 'fastest'")
 
 
+@method(
+    equations={
+        "electron_momentum": r"m_e(-i\tilde\omega + \nu)\,\delta\mathbf v + m_e\, v_0'\,\delta v_x\,\hat y = i e\mathbf k\,\delta\phi - e\,\delta\mathbf v\times\mathbf B - i\mathbf k T_e a_e, \qquad \tilde\omega = \omega - \mathbf k\cdot\mathbf v_0",
+        "electron_continuity": r"(-i\omega - \nu_\mathrm{iz})\, a_e + \left(i k_x + \frac{1}{L_n}\right)\delta v_x + \frac{\partial\,\delta v_x}{\partial B}\frac{B}{L_B} + \frac{\partial\,\delta v_x}{\partial E_0}\frac{E_0}{L_E} + i k_y\,\delta v_y + (\mathbf v_0\text{ convection}) = 0",
+        "cold_ions": r"\frac{\delta n_i}{n_0} = \frac{i\mathbf k\cdot\delta\mathbf v_i + \delta v_{ix}/L_n - \nu_\mathrm{iz} a_e}{i(\omega - \mathbf k\cdot\mathbf v_{0i})}, \qquad \delta\mathbf v_i = \frac{e}{M}\frac{\mathbf k\,\delta\phi}{\omega - \mathbf k\cdot\mathbf v_{0i} + i\nu_i}",
+        "closure": r"k^2\lambda_D^2\,\frac{e\,\delta\phi}{T_e} = a_i - a_e \ (\text{Poisson}) \quad \text{or} \quad a_i = a_e",
+        "roots": r"\text{minima of } |\text{residual}| \text{ on a grid in } \omega, \text{ then Newton}; \quad \text{drift ordering: } |\mathrm{Re}\,\omega| < 0.3 k_y v_E,\ |\mathrm{Im}\,\omega| < 0.02\,\omega_{ce}",
+    },
+    assumptions=(
+        r"local (WKB) perturbations $e^{i(k_x x + k_y y) - i\omega t}$; signed gradient lengths $L = f/f'$",
+        r"the compressibility of every drift in the model field $B(x)\hat z$ by differentiation in $B$ and $E_0$; `curl_free_field` adds the vacuum field's second $-v_x/L_B$",
+        r"roots dropped beyond $|\omega - \mathbf k\cdot\mathbf v_{0e}| > 0.7\,\omega_{ce}$ or $|\mathrm{Im}\,\omega| > 0.1\,\omega_{ce}$",
+    ),
+    references=("[Boeuf, arXiv:2211.17051](https://arxiv.org/abs/2211.17051)",),
+    components=(KineticIons,),
+)
 @dataclass(frozen=True)
 class LocalDispersion:
     """The local dispersion relation: ``plasma`` and electrons, ``ions``, the closure.
@@ -451,7 +503,7 @@ class LocalDispersion:
         """The selected branch over ``k_y``: ``growth_rate``, ``frequency``, ``phase_speed``.
 
         ``branch="drift"`` follows the fastest root of the drift ordering
-        (:meth:`LocalRoots.drift`), ``"fastest"`` the fastest root of all. Every root found
+        (`LocalRoots.drift`), ``"fastest"`` the fastest root of all. Every root found
         (up to ``max_roots``, fastest first, ``nan`` beyond) is returned too as ``omega_re``
         and ``omega_im`` on ``(ky, root)``, so the branches can be sorted afterwards. Each
         ``k_y`` is seeded with the roots of the previous one, so a branch is followed.
@@ -496,7 +548,7 @@ def scan_profile(
     ``profile`` has ``x`` (m) and the variables ``density`` (m^-3), ``e_field`` (V/m),
     ``b_field`` (T) and ``electron_temperature`` (eV); the gradient lengths come from
     centred differences. ``ions`` default to cold argon; ``branch`` as in
-    :meth:`LocalDispersion.scan`. Returns ``growth_rate``, ``frequency`` and
+    `LocalDispersion.scan`. Returns ``growth_rate``, ``frequency`` and
     ``phase_speed`` on ``x``, every root as ``omega_re`` and ``omega_im`` on ``(x, root)``,
     and the lengths used.
     """

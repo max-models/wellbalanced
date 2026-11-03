@@ -1,29 +1,29 @@
 """The coil current and the plasma together: a power-dependent plasma in the RF field.
 
 For a prescribed plasma the field is linear in the coil current, so the absorbed power
-fixes the current (:meth:`~wellbalanced.spatial.inductive.InductiveSolution.for_power`).
-A real plasma depends on the power it absorbs; :class:`DriverCoupling` closes the loop
+fixes the current (`wellbalanced.spatial.inductive.InductiveSolution.for_power`).
+A real plasma depends on the power it absorbs; `DriverCoupling` closes the loop
 between a field model and a plasma model, each a callable:
 
-- ``plasma(P)``: the plasma absorbing ``P`` W, as a :class:`PlasmaProfile` (and anything
+- ``plasma(P)``: the plasma absorbing ``P`` W, as a `PlasmaProfile` (and anything
   else to keep, e.g. a global model's state);
-- ``field(profile)``: the :class:`~wellbalanced.spatial.inductive.InductiveField2D` of
+- ``field(profile)``: the `wellbalanced.spatial.inductive.InductiveField2D` of
   that plasma.
 
-:meth:`DriverCoupling.at_absorbed_power` sets the power the plasma absorbs (one pass, the
-coil current follows). :meth:`DriverCoupling.at_rf_power` sets the generator power, as
+`DriverCoupling.at_absorbed_power` sets the power the plasma absorbs (one pass, the
+coil current follows). `DriverCoupling.at_rf_power` sets the generator power, as
 Zielke et al. (PSST 31, 035019, 2022) do with their integral controller: the plasma
 absorbs ``P = eta P_RF`` with ``eta = R_p / (R_p + R_net)``, and ``R_p`` depends on the
 plasma, so ``P`` is the fixed point of ``P -> eta(P) P_RF``, iterated (with relaxation)
 to a relative tolerance.
 
-:func:`global_model_plasma` makes the plasma model of an
-:class:`~wellbalanced.driver.RFDriver`'s global model: its electron density, temperature
+`global_model_plasma` makes the plasma model of an
+`wellbalanced.driver.RFDriver`'s global model: its electron density, temperature
 and momentum-transfer frequency on a fixed spatial shape. With it the 0D plasma sits in
 the real 2D (or r–z) field instead of the transformer model, which the returned
-:class:`~wellbalanced.driver.DriverState` still gives for comparison.
+`wellbalanced.driver.DriverState` still gives for comparison.
 
-:func:`fluid_plasma` makes the plasma model of a :class:`~wellbalanced.spatial.fluid.Fluid2D`
+`fluid_plasma` makes the plasma model of a `wellbalanced.spatial.fluid.Fluid2D`
 instead: at a given absorbed power, the field of the fluid's plasma heats the fluid
 (``1/2 Re(J E*)``) and pushes its electrons (the RF Lorentz force), and the two are
 iterated to a fixed point, so the plasma's shape comes out of the model.
@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+from methodcard import method
 
 from wellbalanced.driver import DriverState, RFDriver
 from wellbalanced.global_model import GlobalState
@@ -68,7 +69,7 @@ class PlasmaProfile:
     electron_temperature: CellField | None = None
 
     def settings(self) -> dict[str, Any]:
-        """The keyword arguments of :class:`InductiveField2D` this plasma sets."""
+        """The keyword arguments of `InductiveField2D` this plasma sets."""
         settings: dict[str, Any] = {
             "electron_density": self.electron_density,
             "collision_frequency": self.collision_frequency,
@@ -85,7 +86,7 @@ class CoupledState:
     Attributes:
         solution: The field, scaled to the coil current of the operating point.
         plasma: What the plasma model returned besides the profile (a
-            :class:`~wellbalanced.driver.DriverState` for :func:`global_model_plasma`).
+            `wellbalanced.driver.DriverState` for `global_model_plasma`).
         rf_power: The generator power ``P + R_net I^2 / 2`` [W].
         absorbed_power: The power the plasma absorbs [W].
         network_resistance: ``R_net`` [Ohm].
@@ -158,6 +159,20 @@ class DriverCoupling:
             history=[power],
         )
 
+    @method(
+        equations={
+            "fixed_point": r"P \leftarrow P + r\big(\eta(P)\, P_\mathrm{RF} - P\big), \qquad \eta = \frac{R_p}{R_p + R_\mathrm{net}}, \qquad R_p = \frac{2 P_1}{|I_1|^2}",
+            "stop": r"|\eta P_\mathrm{RF} - P| < 10^{-6} P_\mathrm{RF}, \quad \text{at most 50 passes}",
+            "generator": r"P_\mathrm{RF} = P + \tfrac12 R_\mathrm{net}|I|^2",
+        },
+        assumptions=(
+            r"each pass: the plasma at $P$, its field for 1 A; start from `guess` or $P_\mathrm{RF}/2$; $r$ = `relaxation` (1)",
+            r"the field linear in the coil current, so the last field is scaled to $P$; a cut needs `depth`",
+        ),
+        references=(
+            "[Zielke et al., Plasma Sources Sci. Technol. 31, 035019 (2022)](https://doi.org/10.1088/1361-6595/ac5845)",
+        ),
+    )
     def at_rf_power(
         self,
         rf_power: float,
@@ -267,6 +282,16 @@ class FluidPlasma:
     history: list[float] = field(default_factory=list)
 
 
+@method(
+    equations={
+        "pass": r"a = \text{field}(n_e, \nu, [T_e]) \text{ scaled to } P, \qquad \text{Fluid2D steady state with } p_\mathrm{RF} = \tfrac12\mathrm{Re}(J E^*),\ \mathbf F = \text{lorentz}\cdot\mathbf F_L",
+        "stop": r"\frac{\max|\Delta n_e|}{\max n_e} < \text{tolerance} \ (10^{-3}), \quad \text{at most 40 passes}",
+    },
+    assumptions=(
+        r"the force ramped linearly over the first `ramp` passes; with `relaxation` $< 1$ heating and force mixed with the last pass's",
+        r"each fluid solve from the last state with $\Delta t = 10^{-7}$ s, retried with the default; as coded it works in r–z only (`for_power` without a depth)",
+    ),
+)
 def fluid_plasma(
     fluid: Fluid2D,
     field: Callable[[PlasmaProfile], InductiveField2D],
@@ -279,7 +304,7 @@ def fluid_plasma(
     relaxation: float = 1.0,
     ramp: int = 1,
 ) -> Callable[[float], tuple[PlasmaProfile, FluidPlasma]]:
-    """The plasma model of a :class:`Fluid2D` in its field, for :class:`DriverCoupling`.
+    """The plasma model of a `Fluid2D` in its field, for `DriverCoupling`.
 
     At an absorbed power ``P``: the field of the fluid's plasma (``field(profile)``, on
     the fluid's grid) scaled to ``P``, the fluid's steady state heated by its

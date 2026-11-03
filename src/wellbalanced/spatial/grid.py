@@ -1,10 +1,10 @@
 """The tensor-product cell grid of the spatial models, in an x–y cut or in r–z.
 
-:class:`CellGrid` is the only place where the spatial models of
-:mod:`wellbalanced.spatial` meet the geometry: the cell edges and centres, the
+`CellGrid` is the only place where the spatial models of
+`wellbalanced.spatial` meet the geometry: the cell edges and centres, the
 cross-section areas, volumes and face areas of the cells, the metric of the
 geometry, the masks of shapes and the finite-volume operators. The solvers use
-nothing else, so another grid can replace it: :class:`~wellbalanced.spatial.patches.PatchGrid`,
+nothing else, so another grid can replace it: `wellbalanced.spatial.patches.PatchGrid`,
 the leaf cells of a patchwork hierarchy, has the same interface (its fields are arrays
 over the cells, shape ``(n,)``, where this grid's are ``(nx, ny)``).
 
@@ -36,6 +36,7 @@ from typing import Any, Literal
 
 import numpy as np
 import scipy.sparse as sp
+from methodcard import ConvergenceProblem, method
 
 __all__ = [
     "AxisBoundary",
@@ -102,7 +103,7 @@ class TransportFaces:
     ``boundary_delta``; ``boundary_symmetry`` marks the edges of ``"neumann"`` axes. The
     axis of an r–z domain (no area) and periodic seams have no boundary face.
 
-    Between leaf cells of different levels (a :class:`~wellbalanced.spatial.PatchGrid`)
+    Between leaf cells of different levels (a `wellbalanced.spatial.PatchGrid`)
     each face is as long as the finer cell's side, so a coarse cell has several faces
     on that side, and its centre is off the line through the finer centre normal to the
     face: ``coarse_side`` (per interior face: 0 if ``low`` is the coarser cell, 1 if
@@ -175,6 +176,35 @@ class TransportFaces:
         return cls(
             *(a[keep_inner] for a in inner), *(a[keep_edge] for a in edge), **levels
         )
+
+
+def _curl_curl_problem() -> ConvergenceProblem:
+    """Manufactured fields on the unit square: ``K a = V f``, against ``a``.
+
+    The cut: ``a = sin(pi x) sin(pi y)``, ``f = 2 pi^2 a``. r–z, the axis at ``r = 0``:
+    ``a = r (1 - r) sin(pi z)``, ``f = -(laplacian - 1/r^2) a = (3 + pi^2 r (1 - r)) sin(pi z)``.
+    """
+    import scipy.sparse.linalg as spla
+
+    def error(h: float) -> dict[str, float]:
+        edges = np.linspace(0.0, 1.0, round(1.0 / h) + 1)
+        errors = {}
+        for name in ("cut", "rz"):
+            geometry = "cartesian" if name == "cut" else "cylindrical"
+            grid = CellGrid(edges, edges, geometry=geometry)
+            x, y = grid.xx, grid.yy
+            if name == "cut":
+                exact = np.sin(np.pi * x) * np.sin(np.pi * y)
+                source = 2.0 * np.pi**2 * exact
+            else:
+                exact = x * (1.0 - x) * np.sin(np.pi * y)
+                source = (3.0 + np.pi**2 * x * (1.0 - x)) * np.sin(np.pi * y)
+            rhs = (grid.cell_volumes * source).ravel()
+            field = spla.spsolve(grid.curl_curl().tocsc(), rhs).reshape(grid.shape)
+            errors[name] = float(np.max(np.abs(field - exact)))
+        return errors
+
+    return ConvergenceProblem(error, steps=[1 / 16, 1 / 32, 1 / 64])
 
 
 class CellGrid:
@@ -274,7 +304,7 @@ class CellGrid:
     # --- fields and regions -----------------------------------------------------
 
     def cell_field(self, value: CellField, dtype: Any = float) -> np.ndarray:
-        """A :data:`CellField` evaluated on the cell centres, shape :attr:`shape`."""
+        """A `CellField` evaluated on the cell centres, shape `shape`."""
         if callable(value):
             result = np.asarray(value(self.xx, self.yy), dtype=dtype)
         else:
@@ -387,6 +417,21 @@ class CellGrid:
             return 2.0 * np.pi * self.x[i] * dx[i] / distance
         return 2.0 * np.pi * dy[j] / (face * distance)
 
+    @method(
+        equations={
+            "operator": r"(K a)_i = V_i\, (\nabla\times\nabla\times a)_i, \qquad \nabla\times\nabla\times a = -\nabla^2 a_z \ (\text{cut}), \quad -\left(\nabla^2 - \frac{1}{r^2}\right) a_\phi \ (r\text{–}z)",
+            "energy": r"a^T K a = \sum_f c_f\, \bar\mu_f\, (w_+ a_+ - w_- a_-)^2",
+            "metric": r"\text{cut: } w = 1,\ c = \frac{\ell_f}{\Delta}; \qquad \text{radial face: } w = r,\ c = \frac{2\pi\, dz}{r_f \Delta}; \qquad \text{axial face: } w = 1,\ c = \frac{2\pi r\, dr}{\Delta}",
+            "axis": r"a_\phi = 0 \text{ on the axis}: \quad c = 4\pi\, dz,\ w = 1 \text{ for the half cell } (B_z = 2a/r_0)",
+        },
+        order={"cut": 2, "rz": 2},
+        assumptions=(
+            r"symmetric positive; $\Delta$ the distance between the two centres; $\bar\mu_f$ the mean of the face coefficient's two cells",
+            r"Dirichlet edges add $c\, w^2$ to the diagonal over the half-cell distance; a face to an inactive cell is a Dirichlet face",
+            r"with the axis term a uniform $B_z$ stays a null field of the operator",
+        ),
+        problem=_curl_curl_problem,
+    )
     def curl_curl(
         self,
         face_coefficient: np.ndarray | None = None,
@@ -462,6 +507,15 @@ class CellGrid:
         )
         return (matrix + sp.diags(diagonal)).tocsr()
 
+    @method(
+        equations={
+            "cut": r"B = (\partial_y a,\ -\partial_x a)",
+            "rz": r"B = \left(-\partial_z a,\ \frac{a}{r} + \partial_r a\right)",
+        },
+        assumptions=(
+            r"`numpy.gradient` on the cell centres: second order inside, one-sided at the edges",
+        ),
+    )
     def curl(self, a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """The in-plane curl of the normal field ``a`` on the cell centres.
 
@@ -481,8 +535,17 @@ class CellGrid:
         """The current through a region's cross-section from ``V J`` on its cells."""
         return np.sum(residual[region] / self.circumference[region])
 
+    @method(
+        equations={
+            "areas": r"A_f = \Delta y \ (\text{cut}); \qquad A_f = 2\pi r_f\, \Delta z \ (\text{radial}), \quad A_f = 2\pi r_c\, \Delta r = \pi (r_1^2 - r_0^2) \ (\text{axial})",
+            "distances": r"\delta_\mathrm{low} = x_f - x_\mathrm{low}, \qquad \delta_\mathrm{high} = x_\mathrm{high} - x_f",
+        },
+        assumptions=(
+            r"a domain edge is a wall face, except a `neumann` edge (symmetry), a periodic seam and the axis",
+        ),
+    )
     def transport_faces(self) -> TransportFaces:
-        """The faces of the cells for finite-volume transport (see :class:`TransportFaces`)."""
+        """The faces of the cells for finite-volume transport (see `TransportFaces`)."""
         index = np.arange(self.size).reshape(self.shape)
         widths = (np.diff(self.x_edges), np.diff(self.y_edges))
         interior, boundary = [], []

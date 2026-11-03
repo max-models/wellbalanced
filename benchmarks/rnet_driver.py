@@ -213,7 +213,9 @@ def run(variant: str, h: float) -> dict:
     field = model(d, h, variant)
     setup = time.perf_counter() - setup
     start = time.perf_counter()
-    solution = field.solve(1.0, solver="iterative", tolerance=TOLERANCE, max_iterations=4000)
+    solution = field.solve(
+        1.0, solver="iterative", tolerance=TOLERANCE, max_iterations=4000
+    )
     seconds = time.perf_counter() - start
     parts = {name: 2 * p for name, p in solution.conductor_losses.items()}  # Ohm at 1 A
     row = {

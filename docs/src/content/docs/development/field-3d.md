@@ -291,10 +291,13 @@ across it).
 | h | unknowns | coil | shield | R_net | L | iterations | cut cells + solve |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 4 mm | 1.12 M | 0.071 Ω | 0.196 Ω | 0.266 Ω | 4.11 µH | 758 | 443 + 382 s |
+| 3.4 mm | 1.83 M | 0.068 Ω | 0.218 Ω | 0.286 Ω | 4.10 µH | 860 | 418 + 1394 s |
 
-The coil alone (no shield) is 0.070 Ω. The split, 27 % in the coil and 73 % in the
-shield, is the measured one (25 % and 75 %, Zielke et al. 2021), and R_net is 44 % of the
-measured 0.6 Ω, which also has the matching network and the lines. 4 mm is the coarsest
+The coil alone (no shield) is 0.070 Ω at 4 mm. From 4 to 3.4 mm the coil's resistance
+falls by 4 % and the shield's rises by 11 % (R_net +7 %): not converged, as expected at
+first order with a = h. The split, 24–27 % in the coil and 73–76 % in the shield, is the
+measured one (25 % and 75 %, Zielke et al. 2021), and R_net is 44–48 % of the measured
+0.6 Ω, which also has the matching network and the lines. 4 mm is the coarsest
 grid on which the 8 mm tube is one piece of metal. The converged value needs the real
 shield (about 2 mm thick, so h ≲ 1 mm there) and a resolved wire (h ≲ a / 4): about 10^8
 edges on a uniform grid, a production run on mpiarray and cunumpy, or local refinement.

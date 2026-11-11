@@ -78,6 +78,7 @@ from wellbalanced.spatial.cutcell import cut_cells as cut_cells_of
 from wellbalanced.spatial.cutcell import staircased_cells
 from wellbalanced.spatial.edges import EdgeGrid
 from wellbalanced.spatial.iterative import AuxiliarySpacePreconditioner, cocg
+from wellbalanced.spatial.patch_edges import PatchEdgeGrid
 
 __all__ = [
     "Coil3D",
@@ -229,7 +230,7 @@ class ImpedanceConductor3D:
         return (1.0 + 1.0j) * np.sqrt(omega * MU_0 / (2.0 * self.conductivity))
 
 
-def _curl(grid: EdgeGrid) -> sp.csr_matrix:
+def _curl(grid: EdgeGrid | PatchEdgeGrid) -> sp.csr_matrix:
     if not hasattr(grid, "_curl_matrix"):
         grid._curl_matrix = grid.curl()  # type: ignore[attr-defined]
     return grid._curl_matrix  # type: ignore[attr-defined]
@@ -263,7 +264,7 @@ class InductiveSolution3D:
         surface_losses: The power dissipated in each impedance conductor [W].
     """
 
-    grid: EdgeGrid
+    grid: EdgeGrid | PatchEdgeGrid
     frequency: float
     coil_current: complex
     potential: np.ndarray
@@ -415,22 +416,7 @@ class InductiveField3D:
         the indicator at the face's centre such a coil was half a cell too long.
         """
         grid = self.grid
-        centres = grid.face_centres()
-        normals = grid.face_axes()
-        lower, upper = (
-            np.zeros(grid.n_faces, dtype=bool),
-            np.zeros(grid.n_faces, dtype=bool),
-        )
-        for a in range(3):
-            first, last = grid._ends(grid.face_shape(a), a)
-            block = slice(grid.face_offsets[a], grid.face_offsets[a + 1])
-            lower[block], upper[block] = first.ravel(), last.ravel()
-        quarter = 0.25 * grid.spacing[normals]
-        samples = []
-        for sign, beyond in ((-1.0, lower), (1.0, upper)):
-            points = centres.copy()
-            points[normals, np.arange(grid.n_faces)] += sign * quarter
-            samples.append((points, ~beyond))
+        samples = grid.face_dual_points()
         t = np.zeros(grid.n_faces)
         for coil in self.coils:
             direction = np.asarray(coil.direction, dtype=float)
@@ -443,40 +429,20 @@ class InductiveField3D:
             weight /= samples[0][1].astype(float) + samples[1][1]
             if not weight.any():
                 raise ValueError(f"coil {coil.name!r} contains no face")
-            t += weight * coil.turns_per_length * direction[normals]
+            t += weight * coil.turns_per_length * direction[grid.face_axes()]
         return np.asarray(_curl(grid).T @ (t * grid.dual_lengths))
 
     def _feed_edges(self, feed: Feed3D) -> tuple[np.ndarray, np.ndarray, list]:
         """The edges of a feed's path, their signs and the two terminal nodes."""
-        grid = self.grid
-        nodes = []
-        for point in (feed.start, feed.end):
-            index = np.rint(
-                (np.asarray(point, dtype=float) - grid.lower) / grid.spacing
-            )
-            index = index.astype(int)
-            if np.any(index < 0) or np.any(index >= np.asarray(grid.nodes)):
-                raise ValueError(f"feed {feed.name!r}: a terminal is outside the grid")
-            nodes.append(index)
         if sorted(feed.order) != [0, 1, 2]:
             raise ValueError("a feed's order is a permutation of the three axes")
-        edges, signs = [], []
-        current = nodes[0].copy()
-        for axis in feed.order:
-            step = 1 if nodes[1][axis] >= current[axis] else -1
-            while current[axis] != nodes[1][axis]:
-                low = current.copy()
-                if step < 0:
-                    low[axis] -= 1
-                edges.append(
-                    int(grid._edge_index(axis, [np.array([i]) for i in low])[0])
-                )
-                signs.append(float(step))
-                current[axis] += step
-        if not edges:
+        try:
+            edges, signs, nodes = self.grid.feed_path(feed.start, feed.end, feed.order)
+        except ValueError as error:
+            raise ValueError(f"feed {feed.name!r}: {error}") from None
+        if not edges.size:
             raise ValueError(f"feed {feed.name!r}: its terminals are the same node")
-        flat = [int(np.ravel_multi_index(tuple(n), grid.nodes)) for n in nodes]
-        return np.asarray(edges), np.asarray(signs), flat
+        return edges, signs, nodes
 
     def _gradient_matrix(self) -> sp.csr_matrix:
         grid = self.grid
@@ -498,7 +464,8 @@ class InductiveField3D:
         import scipy.sparse.csgraph as csgraph
 
         gradient = abs(self._gradient_matrix())
-        metal = sp.diags((~self.free_edges).astype(float))
+        inside = ~(self.free_edges | grid.hanging_edges)
+        metal = sp.diags(inside.astype(float))
         graph = (gradient.T @ metal @ gradient).tocsr()
         _, piece = csgraph.connected_components(graph, directed=False)
         isolated = np.asarray(graph.sum(axis=1)).ravel() == 0
@@ -556,7 +523,7 @@ class InductiveField3D:
 
     def __init__(
         self,
-        grid: EdgeGrid,
+        grid: EdgeGrid | PatchEdgeGrid,
         *,
         frequency: float,
         coils: Sequence[Coil3D] = (),
@@ -615,6 +582,7 @@ class InductiveField3D:
         self._unit_source = self._unit_source + self._feed_source()
         self._factorizations: dict[float, Any] = {}
         self._preconditioners: dict[float, Any] = {}
+        self._curl_curls: dict[float, Any] = {}
         self._order: np.ndarray | None = None
 
     # --- the operator ----------------------------------------------------------------
@@ -700,6 +668,7 @@ class InductiveField3D:
 
     def _preconditioned(self, frequency: float):
         """The free edges' matrix and its auxiliary-space preconditioner."""
+        assert isinstance(self.grid, EdgeGrid)
         if frequency not in self._preconditioners:
             free = self.free_edges
             matrix = self.matrix(frequency)[free][:, free]
@@ -717,6 +686,27 @@ class InductiveField3D:
             )
         return self._preconditioners[frequency]
 
+    def _curl_curl(self, frequency: float):
+        """Patchwork's `CurlCurl` of the free edges of a `PatchEdgeGrid` (an LU)."""
+        if frequency not in self._curl_curls:
+            from patchwork import CurlCurl
+
+            grid = self.grid
+            assert isinstance(grid, PatchEdgeGrid)
+            omega = 2.0 * np.pi * frequency
+            solver = CurlCurl(
+                grid.hierarchy,
+                faces=grid.conditions,
+                edges=grid.edges,
+                face_mass=grid.dual_lengths * self.face_field_factor(frequency),
+                edge_mass=self._edge_term(omega),
+                fixed=self.edge_air <= 0.0,
+            )
+            if not np.array_equal(solver.free, np.flatnonzero(self.free_edges)):
+                raise RuntimeError("patchwork's unknowns differ from the field's")
+            self._curl_curls[frequency] = solver
+        return self._curl_curls[frequency]
+
     def _factorized(self, frequency: float):
         """The LU of the free edges' matrix, in nested-dissection order, no pivoting.
 
@@ -724,6 +714,7 @@ class InductiveField3D:
         complement, so SuperLU keeps the diagonal pivots (``diag_pivot_thresh = 0``)
         and the order.
         """
+        assert isinstance(self.grid, EdgeGrid)
         if frequency not in self._factorizations:
             if self._order is None:
                 self._order = self.grid.nested_dissection(self.free_edges)
@@ -737,6 +728,28 @@ class InductiveField3D:
                 options={"SymmetricMode": True},
             )
         return self._factorizations[frequency]
+
+    def _solution(
+        self,
+        frequency: float,
+        coil_current: complex,
+        potential: np.ndarray,
+        source: np.ndarray,
+    ) -> InductiveSolution3D:
+        """The solution object of a potential on all edges (hanging ones filled)."""
+        flux = _curl(self.grid) @ potential
+        return InductiveSolution3D(
+            grid=self.grid,
+            frequency=frequency,
+            coil_current=complex(coil_current),
+            potential=potential,
+            source=source.astype(complex),
+            edge_conductance=self.edge_conductance,
+            conductor_edges=self.conductor_edges,
+            face_areas=self.grid.face_areas * self.face_air,
+            face_field_factor=self.face_field_factor(frequency),
+            surface_losses=self.surface_losses(flux, frequency),
+        )
 
     def solve(
         self,
@@ -762,6 +775,13 @@ class InductiveField3D:
         frequency = self.frequency if frequency is None else float(frequency)
         free = self.free_edges
         source = coil_current * self._unit_source
+        if isinstance(self.grid, PatchEdgeGrid):
+            if solver != "direct":
+                raise NotImplementedError(
+                    "on patches the field is solved by patchwork's LU (solver='direct')"
+                )
+            potential = self._curl_curl(frequency).solve(source.astype(complex))
+            return self._solution(frequency, coil_current, potential, source)
         if solver == "direct":
             lu = self._factorized(frequency)
             assert self._order is not None
@@ -788,16 +808,4 @@ class InductiveField3D:
             raise ValueError(f"unknown solver {solver!r}")
         potential = np.zeros(self.grid.n_edges, dtype=complex)
         potential[free] = unknowns
-        flux = _curl(self.grid) @ potential
-        return InductiveSolution3D(
-            grid=self.grid,
-            frequency=frequency,
-            coil_current=complex(coil_current),
-            potential=potential,
-            source=source.astype(complex),
-            edge_conductance=self.edge_conductance,
-            conductor_edges=self.conductor_edges,
-            face_areas=self.grid.face_areas * self.face_air,
-            face_field_factor=self.face_field_factor(frequency),
-            surface_losses=self.surface_losses(flux, frequency),
-        )
+        return self._solution(frequency, coil_current, potential, source)

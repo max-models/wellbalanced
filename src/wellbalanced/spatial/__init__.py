@@ -9,7 +9,8 @@ prescribed plasma (`wellbalanced.spatial.inductive`), the plasma region
 power-dependent plasma (`wellbalanced.spatial.coupling`), and the driver plasma as a
 multi-species fluid heated by that field (`wellbalanced.spatial.fluid`,
 `Fluid2D`). The 3D field (`wellbalanced.spatial.inductive3d`, step R4) is on
-the edges of a Cartesian `wellbalanced.spatial.edges.EdgeGrid`. The neutral gas
+the edges of a Cartesian `wellbalanced.spatial.edges.EdgeGrid`, or of refined
+patches (`wellbalanced.spatial.patch_edges.PatchEdgeGrid`, patchwork's edge space). The neutral gas
 (H and H2 as two Navier–Stokes fluids, step R3.5: `wellbalanced.spatial.neutrals`,
 `NeutralFluid2D`) is on the plasma's cells and coupled to it by
 `couple_neutrals`, and the subpackage is the unit a later
@@ -60,6 +61,7 @@ from wellbalanced.spatial.neutrals import (
     couple_neutrals,
     hard_sphere,
 )
+from wellbalanced.spatial.patch_edges import PatchEdgeGrid
 from wellbalanced.spatial.patches import PatchGrid
 from wellbalanced.spatial.regions import PlasmaRegion
 
@@ -89,6 +91,7 @@ __all__ = [
     "NeutralSpecies",
     "NeutralState",
     "Opening",
+    "PatchEdgeGrid",
     "PatchGrid",
     "PlasmaProfile",
     "PlasmaRegion",

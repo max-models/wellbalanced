@@ -35,7 +35,7 @@ import scipy.sparse as sp
 from methodcard import method
 from plasmacoll.units import to_unit
 
-__all__ = ["EdgeGrid", "SideBoundary"]
+__all__ = ["EdgeGrid", "SideBoundary", "edge_average"]
 
 SideBoundary = Literal["dirichlet", "natural", "periodic"]
 _SIDES = ("dirichlet", "natural", "periodic")
@@ -52,6 +52,47 @@ def _sides(boundary: Any) -> tuple[SideBoundary, SideBoundary]:
 
 
 _CYCLE = ((0, 1, 2), (1, 2, 0), (2, 0, 1))
+
+
+def edge_average(
+    midpoints: np.ndarray,
+    axes: np.ndarray,
+    sizes: np.ndarray,
+    value: Callable[[np.ndarray], np.ndarray],
+    samples: int,
+) -> np.ndarray:
+    """A coefficient per edge from a point function: the conductance of its dual cell.
+
+    ``midpoints`` ``(3, n)``, the axis of every edge, and ``sizes`` ``(3, n)``: the
+    extent of every edge's dual cell along each axis (the edge's length along it).
+    See `EdgeGrid.edge_average`.
+    """
+    if samples == 1:
+        return np.asarray(value(midpoints))
+    if samples < 1:
+        raise ValueError("samples must be >= 1")
+    count = midpoints.shape[1]
+    offsets = (np.arange(samples) + 0.5) / samples - 0.5
+    result = np.zeros(count, dtype=complex)
+    for across_1 in offsets:
+        for across_2 in offsets:
+            inverse = np.zeros(count, dtype=complex)
+            blocked = np.zeros(count, dtype=bool)
+            for along in offsets:
+                points = midpoints.copy()
+                for a in range(3):
+                    b, c = (a + 1) % 3, (a + 2) % 3
+                    edges = axes == a
+                    points[a, edges] += along * sizes[a, edges]
+                    points[b, edges] += across_1 * sizes[b, edges]
+                    points[c, edges] += across_2 * sizes[c, edges]
+                sampled = np.asarray(value(points), dtype=complex)
+                zero = sampled == 0
+                blocked |= zero
+                inverse[~zero] += 1.0 / sampled[~zero]
+            series = np.where(blocked, 0.0, samples / np.where(blocked, 1.0, inverse))
+            result += series / samples**2
+    return result
 
 
 @method(
@@ -180,6 +221,8 @@ class EdgeGrid:
         )
         #: Which edges are unknowns: all but those in a Dirichlet wall.
         self.free_edges = np.concatenate([self._free(a) for a in range(3)])
+        #: Which edges hang (none on a uniform grid; see `PatchEdgeGrid`).
+        self.hanging_edges = np.zeros(self.n_edges, dtype=bool)
 
     # --- counting ---------------------------------------------------------------
 
@@ -236,6 +279,104 @@ class EdgeGrid:
         """The normal axis (0, 1, 2) of every face."""
         return np.repeat(np.arange(3), np.diff(self.face_offsets))
 
+    def face_dual_points(self) -> tuple[tuple[np.ndarray, np.ndarray], ...]:
+        """The midpoints of the two halves of every face's dual edge.
+
+        Returns ``((below, valid), (above, valid))``: ``(3, n_faces)`` points a quarter
+        cell below and above every face along its normal, and whether that half
+        exists (not beyond a non-periodic boundary).
+        """
+        centres = self.face_centres()
+        normals = self.face_axes()
+        lower = np.zeros(self.n_faces, dtype=bool)
+        upper = np.zeros(self.n_faces, dtype=bool)
+        for a in range(3):
+            first, last = self._ends(self.face_shape(a), a)
+            block = slice(self.face_offsets[a], self.face_offsets[a + 1])
+            lower[block], upper[block] = first.ravel(), last.ravel()
+        quarter = 0.25 * self.spacing[normals]
+        result = []
+        for sign, beyond in ((-1.0, lower), (1.0, upper)):
+            points = centres.copy()
+            points[normals, np.arange(self.n_faces)] += sign * quarter
+            result.append((points, ~beyond))
+        return tuple(result)
+
+    # --- operators -----------------------------------------------------------------
+
+    def _edge_index(self, axis: int, index: list[np.ndarray]) -> np.ndarray:
+        """Global edge numbers of multi-indices (wrapped on periodic axes)."""
+        shape = self.edge_shape(axis)
+        wrapped = [i % n for i, n in zip(index, shape, strict=True)]
+        return self.edge_offsets[axis] + np.ravel_multi_index(wrapped, shape)
+
+    def feed_path(
+        self, start: Sequence[float], end: Sequence[float], order: Sequence[int]
+    ) -> tuple[np.ndarray, np.ndarray, list[int]]:
+        """The edges from the node nearest ``start`` to the one nearest ``end``.
+
+        Axis by axis in ``order``. Returns the edges, their signs (+1 along the
+        edge's direction) and the numbers of the two end nodes.
+        """
+        nodes = []
+        for point in (start, end):
+            index = np.rint(
+                (np.asarray(point, dtype=float) - self.lower) / self.spacing
+            )
+            index = index.astype(int)
+            if np.any(index < 0) or np.any(index >= np.asarray(self.nodes)):
+                raise ValueError("a terminal is outside the grid")
+            nodes.append(index)
+        edges, signs = [], []
+        current = nodes[0].copy()
+        for axis in order:
+            step = 1 if nodes[1][axis] >= current[axis] else -1
+            while current[axis] != nodes[1][axis]:
+                low = current.copy()
+                if step < 0:
+                    low[axis] -= 1
+                edges.append(
+                    int(self._edge_index(axis, [np.array([i]) for i in low])[0])
+                )
+                signs.append(float(step))
+                current[axis] += step
+        flat = [int(np.ravel_multi_index(tuple(n), self.nodes)) for n in nodes]
+        return np.asarray(edges, dtype=int), np.asarray(signs), flat
+
+    def yee_fractions(
+        self, geometry: Any, samples: int = 64
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """What of every edge and face a simgeometry ``geometry`` covers.
+
+        simgeometry's ``yee_fractions`` in this grid's numbering: the fraction of every
+        edge's length and every face's area inside, the trace of the surface in every
+        face and its projection (`wellbalanced.spatial.cutcell`).
+        """
+        import simgeometry as sg
+
+        grid = sg.Grid(
+            3,
+            tuple(self.lower),
+            tuple(self.upper),
+            self.nodes,
+            periodic=tuple(bool(p) for p in self.periodic),
+        )
+        fractions = geometry.yee_fractions(grid, samples=samples)
+        for a in range(3):
+            if fractions.edges[a].shape != self.edge_shape(a):
+                raise ValueError(
+                    "simgeometry's edge layout differs from the edge grid's"
+                )
+        return tuple(  # type: ignore[return-value]
+            np.concatenate([f.ravel() for f in family])
+            for family in (
+                fractions.edges,
+                fractions.faces,
+                fractions.traces,
+                fractions.projected_traces,
+            )
+        )
+
     # --- masks ------------------------------------------------------------------
 
     @staticmethod
@@ -265,36 +406,10 @@ class EdgeGrid:
         mean across (in parallel), the conductance of the edge's dual cell. ``value``
         takes ``(3, n)`` points and returns ``n`` values (zero is an insulator).
         """
-        midpoints = self.edge_midpoints()
-        if samples == 1:
-            return np.asarray(value(midpoints))
-        if samples < 1:
-            raise ValueError("samples must be >= 1")
-        offsets = (np.arange(samples) + 0.5) / samples - 0.5
-        axes = self.edge_axes()
-        h = self.spacing
-        result = np.zeros(self.n_edges, dtype=complex)
-        for across_1 in offsets:
-            for across_2 in offsets:
-                inverse = np.zeros(self.n_edges, dtype=complex)
-                blocked = np.zeros(self.n_edges, dtype=bool)
-                for along in offsets:
-                    points = midpoints.copy()
-                    for a in range(3):
-                        b, c = (a + 1) % 3, (a + 2) % 3
-                        edges = axes == a
-                        points[a, edges] += along * h[a]
-                        points[b, edges] += across_1 * h[b]
-                        points[c, edges] += across_2 * h[c]
-                    sampled = np.asarray(value(points), dtype=complex)
-                    zero = sampled == 0
-                    blocked |= zero
-                    inverse[~zero] += 1.0 / sampled[~zero]
-                series = np.where(
-                    blocked, 0.0, samples / np.where(blocked, 1.0, inverse)
-                )
-                result += series / samples**2
-        return result
+        sizes = np.repeat(self.spacing[:, None], self.n_edges, axis=1)
+        return edge_average(
+            self.edge_midpoints(), self.edge_axes(), sizes, value, samples
+        )
 
     def nested_dissection(self, edges: np.ndarray, leaf: int = 64) -> np.ndarray:
         """A fill-reducing order of the ``edges`` (a mask) for a sparse LU.
@@ -328,14 +443,6 @@ class EdgeGrid:
             return [*split(ids[lower]), *split(ids[upper]), ids[plane]]
 
         return np.concatenate(split(np.arange(points.shape[1])))
-
-    # --- operators -----------------------------------------------------------------
-
-    def _edge_index(self, axis: int, index: list[np.ndarray]) -> np.ndarray:
-        """Global edge numbers of multi-indices (wrapped on periodic axes)."""
-        shape = self.edge_shape(axis)
-        wrapped = [i % n for i, n in zip(index, shape, strict=True)]
-        return self.edge_offsets[axis] + np.ravel_multi_index(wrapped, shape)
 
     def curl(self) -> sp.csr_matrix:
         """The face–edge incidence ``C`` (``b = C a``), ``n_faces x n_edges``."""

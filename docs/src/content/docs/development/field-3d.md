@@ -302,6 +302,38 @@ grid on which the 8 mm tube is one piece of metal. The converged value needs the
 shield (about 2 mm thick, so h ≲ 1 mm there) and a resolved wire (h ≲ a / 4): about 10^8
 edges on a uniform grid, a production run on mpiarray and cunumpy, or local refinement.
 
+## Refined patches (R4b)
+
+`PatchEdgeGrid` puts a 3D patchwork hierarchy behind the edge grid's interface, so
+`InductiveField3D` runs on refined patches with the same coils, feeds, volume and
+surface-impedance conductors. The unknowns are patchwork's composite edges of the leaf
+cells (`CompositeEdges`, lowest-order Whitney edges), the fluxes its composite faces
+(`CompositeFaces`); the Hodge diagonals are the lumped masses, `A*_e = (M1)_ee L_e` and
+`L*_f = (M2)_ff A_f`, so inside a patch it is the finite integration of the uniform grid.
+At a coarse–fine boundary the fine edges and faces on a coarse cell's sides hang
+(`C T1 = T2 C T1`). The coarse face keeps half a dual edge, like a face on the box's
+boundary. The field is solved by patchwork's `CurlCurl`. Its `face_mass` takes the
+cut faces' `L*_f / D_f` (surface impedance included), its `edge_mass` the conductances
+and the gauge, and `fixed` takes the edges inside the conductors. The coil current
+`C^T (T L*)`, reduced by `T1^T`, stays discretely divergence-free. The cut cells come
+from simgeometry's `yee_fractions` on every patch's own grid. `PatchEdgeGrid.around`
+refines where the conductors' surfaces cut the cells. The checks
+(`tests/unit/test_patch_edges.py`):
+
+- one level is the uniform grid: the same impedance and losses to round-off (Dirichlet,
+  natural and periodic sides, volume conductors with sub-cell samples, cut cells);
+- patches over a tube's surface give the fine uniform grid's impedance and loss to 1e-6
+  (z-periodic quarter), and a short coax fed across a gap (`Feed3D` along the finest edges
+  there are) to 1e-5; the losses equal the delivered power `Re S` with hanging edges;
+- the slotted tube in a 12 cm box (the tutorial): two levels over 24 cells give the loss
+  of 96 uniform cells to 5e-10 on 9 904 edges instead of 28 033.
+
+Left: the solve on patches is patchwork's sparse LU. The iterative solver (COCG with
+the auxiliary-space preconditioner) is on the uniform grid only. On patches it needs
+patchwork's AMS for the complex system, in a real-equivalent block form. Until then
+`EdgeGrid` stays for large uniform runs and the two edge spaces coexist. Also left:
+non-box domains, and staircased conductors on patches (cut cells only).
+
 ## What it costs
 
 - **Yee grid, direct:** the direct solve takes 40–60 s for 65 000 unknowns (24 × 24 × 40
@@ -373,8 +405,9 @@ need multipatch domains there.
 - Volume conductors with cut cells, for metal whose skin depth is comparable to its
   thickness (the 5 kHz case): the sub-cell conductance of the first round does not do
   it.
-- Edge operators in patchwork. Patchwork's operators today are cell-centred and 2D,
-  so they cannot refine the 3D field.
+- Done in R4b: the field on patchwork's edge space (`PatchEdgeGrid`, solved by
+  patchwork's `CurlCurl`), see "Refined patches". Left there: the iterative solver on
+  patches (patchwork's AMS for complex systems).
 - The iterative solver on mpiarray and cunumpy (it is all sparse products and a
   multigrid on a Cartesian grid).
 - Done in the third round: coils of real wire (`Feed3D`), the helical coil and the

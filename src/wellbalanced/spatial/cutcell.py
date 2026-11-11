@@ -2,7 +2,8 @@
 
 The geometry of the surface-impedance conductors of
 `wellbalanced.spatial.inductive3d.InductiveField3D`, in the numbering of an
-`wellbalanced.spatial.edges.EdgeGrid`:
+`wellbalanced.spatial.edges.EdgeGrid` or a
+`wellbalanced.spatial.patch_edges.PatchEdgeGrid`:
 
 - ``edge_air``: the fraction of every edge's length outside the conductor;
 - ``face_air``: the fraction of every face's area outside;
@@ -32,12 +33,15 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import reduce
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from methodcard import method
 
 from wellbalanced.spatial.edges import EdgeGrid
+
+if TYPE_CHECKING:
+    from wellbalanced.spatial.patch_edges import PatchEdgeGrid
 
 __all__ = ["CutCells", "cut_cells", "staircased_cells"]
 
@@ -57,18 +61,6 @@ class CutCells:
     face_width: np.ndarray
 
 
-def _simgeometry_grid(grid: EdgeGrid):
-    import simgeometry as sg
-
-    return sg.Grid(
-        3,
-        tuple(grid.lower),
-        tuple(grid.upper),
-        grid.nodes,
-        periodic=tuple(bool(p) for p in grid.periodic),
-    )
-
-
 @method(
     equations={
         "fractions": r"\text{edge\_air} = 1 - f_e, \qquad \text{face\_air} = 1 - f_f \quad (\text{simgeometry's } \texttt{yee\_fractions})",
@@ -82,7 +74,7 @@ def _simgeometry_grid(grid: EdgeGrid):
     references=("Dey and Mittra (conformal cut faces)",),
 )
 def cut_cells(
-    grid: EdgeGrid,
+    grid: EdgeGrid | PatchEdgeGrid,
     shapes: Sequence[Any],
     *,
     min_sine: float = 0.1,
@@ -91,7 +83,8 @@ def cut_cells(
     """The conformal cut cells of the union of simgeometry ``shapes``.
 
     Args:
-        grid: The edge grid.
+        grid: The edge grid, uniform or on patches (`PatchEdgeGrid`, fractions per
+            patch).
         shapes: simgeometry shapes (3D); their union is the conductor.
         min_sine: The lower bound of ``sin(theta)`` in the width ``trace / sin(theta)``:
             a surface almost parallel to a face makes that face's normal field small
@@ -101,14 +94,8 @@ def cut_cells(
     if not shapes:
         raise ValueError("a conductor needs at least one shape")
     union = reduce(lambda a, b: a | b, shapes)
-    fractions = union.yee_fractions(_simgeometry_grid(grid), samples=samples)
-    for a in range(3):
-        if fractions.edges[a].shape != grid.edge_shape(a):
-            raise ValueError("simgeometry's edge layout differs from the edge grid's")
-    edge_air = 1.0 - np.concatenate([f.ravel() for f in fractions.edges])
-    face_air = 1.0 - np.concatenate([f.ravel() for f in fractions.faces])
-    trace = np.concatenate([f.ravel() for f in fractions.traces])
-    projected = np.concatenate([f.ravel() for f in fractions.projected_traces])
+    edges, faces, trace, projected = grid.yee_fractions(union, samples=samples)
+    edge_air, face_air = 1.0 - edges, 1.0 - faces
     sine = np.where(trace > 0, projected / np.where(trace > 0, trace, 1.0), 1.0)
     width = trace / np.maximum(sine, min_sine)
     return CutCells(
@@ -116,8 +103,13 @@ def cut_cells(
     )
 
 
-def staircased_cells(grid: EdgeGrid, shapes: Sequence[Any]) -> CutCells:
-    """The staircased conductor: the cells whose centre one of ``shapes`` contains."""
+def staircased_cells(grid: EdgeGrid | PatchEdgeGrid, shapes: Sequence[Any]) -> CutCells:
+    """The staircased conductor: the cells whose centre one of ``shapes`` contains.
+
+    On a uniform `EdgeGrid` only.
+    """
+    if not isinstance(grid, EdgeGrid):
+        raise TypeError("staircased cells need a uniform EdgeGrid; use cut_cells")
     centres = np.stack(
         [
             g.ravel()

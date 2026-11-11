@@ -7,6 +7,10 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `DriftFluid2D.linear_modes(frozen=("ionization_frequency",))`: the ionization frequency held
+  at its base value while the source follows `n_e`, the consistent form of the nonlocal solvers.
+  `examples/spoke_linear_settled.py` relaxes the 1D state with a chosen anode closure and Bohm
+  coefficient for a long time, saves it and reports the Jacobian spectrum with the responses frozen.
 - `Feed3D`: coils of real wire in the 3D field. The coil current flows along grid edges
   across a gap between the terminals of an `ImpedanceConductor3D` (a delta-gap source) and
   returns on its surface, so the impedance includes the coil's own loss and proximity

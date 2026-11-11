@@ -972,6 +972,7 @@ class DriftFluid2D:
     cathode_absorbs: bool = False
     floor_added: dict = field(default_factory=lambda: {"ne": 0.0, "ni": 0.0, "N": 0.0})
     _rate_override: np.ndarray | None = field(default=None, repr=False)
+    _frequency_override: np.ndarray | None = field(default=None, repr=False)
     _lu: spla.SuperLU | None = field(default=None, repr=False)
     bohm: float = 0.0
     bohm_below: float | None = unit_field("T", None)
@@ -1546,6 +1547,8 @@ class DriftFluid2D:
         rate = self.ionization_rate(te) * gas * ne
         if self._rate_override is not None:
             rate = self._rate_override
+        elif self._frequency_override is not None:
+            rate = self._frequency_override * ne
         div_e = (self._divx @ gam_x.ravel() + self._divy @ gam_y.ravel()).reshape(
             ne.shape
         )
@@ -1643,7 +1646,11 @@ class DriftFluid2D:
 
         ``frozen`` switches off responses, to see what each does: ``"temperature"`` (``T_e``
         held at its value, no energy perturbation), ``"ionization"`` (the ionization source held
-        at its base value), ``"gas"`` (the neutral density not perturbed).
+        at its base value), ``"gas"`` (the neutral density not perturbed),
+        ``"ionization_frequency"`` (the ionization frequency ``k(T_e) N`` held at its base value,
+        so the source still follows ``n_e``: the consistent form of the nonlocal solvers, where
+        the source perturbation is ``nu_iz dn_e`` and the equilibrium continuity removes it from
+        the density equation; ``"ionization"`` removes the ``dn_e`` part too).
 
         With ``s = gamma - i omega`` the eigenvalues, ``exp(i k y + s t)``, ``gamma > 0``
         grows and ``omega / k > 0`` moves along ``+y`` (the E x B direction when ``E_x < 0``
@@ -1655,10 +1662,19 @@ class DriftFluid2D:
             if np.abs(value - value[:, :1]).max() > 1e-9 * np.abs(value).max():
                 raise ValueError(f"the state must be uniform along y ({name})")
         k = 2.0 * np.pi * mode / self.length_y
-        saved = (self.external_sources, self.electron_temperature, self._rate_override)
+        saved = (
+            self.external_sources,
+            self.electron_temperature,
+            self._rate_override,
+            self._frequency_override,
+        )
         try:
             if "temperature" in frozen and self.electron_temperature is None:
                 self.electron_temperature = state.electron_temperature.copy()
+            if "ionization_frequency" in frozen and "ionization" not in frozen:
+                self._frequency_override = (
+                    self.ionization_rate(state.electron_temperature) * state.gas_density
+                )
             if "ionization" in frozen:
                 self._rate_override = None
                 self._rate_override = (
@@ -1704,9 +1720,12 @@ class DriftFluid2D:
                             row_key * nx : (row_key + 1) * nx, column_key * nx + i
                         ] = (response @ phase) / ny
         finally:
-            self.external_sources, self.electron_temperature, self._rate_override = (
-                saved
-            )
+            (
+                self.external_sources,
+                self.electron_temperature,
+                self._rate_override,
+                self._frequency_override,
+            ) = saved
         values, vectors = np.linalg.eig(matrix)
         order = np.argsort(-np.real(values))
         profiles = {

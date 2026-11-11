@@ -554,6 +554,10 @@ def test_frozen_responses_change_the_eigenvalues_and_leave_the_model_alone() -> 
     full = model.linear_modes(base, 2)
     frozen = model.linear_modes(base, 2, frozen=("temperature", "ionization", "gas"))
     assert model.electron_temperature is None  # restored
+    assert model._frequency_override is None and model._rate_override is None
+    consistent = model.linear_modes(base, 2, frozen=("ionization_frequency",))
+    assert consistent.matrix.shape == full.matrix.shape  # still every unknown
+    assert not np.allclose(full.growth_rates[0], consistent.growth_rates[0])
     assert full.matrix.shape[0] > frozen.matrix.shape[0]  # no energy, no gas unknowns
     assert not np.allclose(full.growth_rates[0], frozen.growth_rates[0])
     with pytest.raises(ValueError):

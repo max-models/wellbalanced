@@ -31,7 +31,8 @@ energy equation with wall losses, the discharge current from the voltage
 
 `MHD2D` is ideal and resistive MHD in the plane (three velocity and field components) on the patches
 of a patchwork hierarchy, the in-plane field from a nodal vector potential so that its
-divergence is zero to round-off, refined patches included (`carafe.mhd`).
+divergence is zero to round-off, refined patches included (`carafe.mhd`). `MHD3D` is the same
+in three dimensions, the vector potential on the cell edges (`carafe.mhd3d`).
 
 The solves, time steps and runs carry scope-profiler regions tagged ``"carafe"``,
 an opt-in tag: they record nothing unless an application enables it, e.g. with
@@ -71,6 +72,7 @@ from carafe.hall import HallState, HallThruster1D
 from carafe.irm import IonizationRegion
 from carafe.magnetron import MATERIALS, Magnetron, TargetMaterial
 from carafe.mhd import MHD2D
+from carafe.mhd3d import MHD3D
 from carafe.reactions import Reaction
 from carafe.spatial import (
     CellGrid,
@@ -118,6 +120,7 @@ __all__ = [
     "InductiveSolution",
     "IonizationRegion",
     "MHD2D",
+    "MHD3D",
     "MATERIALS",
     "Magnetron",
     "PlasmaRegion",

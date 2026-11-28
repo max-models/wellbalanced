@@ -653,7 +653,7 @@ class MHD3D:
         for name in CONSERVED_3D:
             self.register.update(
                 self.names[name],
-                lambda patch, name=name: results[id(patch)][0][name],
+                lambda patch, name=name: tuple(results[id(patch)][0][name]),
                 dt,
                 scale=scale,
             )

@@ -1,4 +1,4 @@
-"""MHD2D on several ranks gives what one rank gives (under ``mpirun``)."""
+"""MHD2D and MHD3D on several ranks give what one rank gives (under ``mpirun``)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 JOB = Path(__file__).with_name("_mpi_mhd_job.py")
+JOB_3D = Path(__file__).with_name("_mpi_mhd3d_job.py")
 MPIRUN = shutil.which("mpirun")
 
 pytestmark = pytest.mark.skipif(
@@ -22,8 +23,12 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.mark.parametrize(("ranks", "placement"), [(2, "all"), (3, "morton")])
-def test_mhd_on_several_ranks_gives_what_one_rank_gives(ranks, placement) -> None:
+@pytest.mark.parametrize(
+    ("job", "ranks", "placement"),
+    [(JOB, 2, "all"), (JOB, 3, "morton"), (JOB_3D, 2, "all"), (JOB_3D, 3, "morton")],
+    ids=["2d-all", "2d-morton", "3d-all", "3d-morton"],
+)
+def test_mhd_on_several_ranks_gives_what_one_rank_gives(job, ranks, placement) -> None:
     env = os.environ.copy()
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         env.update(OMPI_ALLOW_RUN_AS_ROOT="1", OMPI_ALLOW_RUN_AS_ROOT_CONFIRM="1")
@@ -34,7 +39,7 @@ def test_mhd_on_several_ranks_gives_what_one_rank_gives(ranks, placement) -> Non
             str(ranks),
             "--oversubscribe",
             sys.executable,
-            str(JOB),
+            str(job),
             placement,
         ],
         capture_output=True,

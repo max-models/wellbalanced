@@ -52,6 +52,16 @@ format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `MHD3D`: ideal and resistive MHD on 3D patchwork hierarchies (`carafe.mhd3d`), with a
+  uniform gravity, periodic or outflow faces and refined patches. The vector potential
+  lives on the cell edges (patchwork's edge-centered patch fields), so div B is zero per
+  cell and on the composite mesh to round-off, across regrids too; the fluxes are those of
+  `MHD2D` (MUSCL, HLLD through the `mhd_sweep` kernel along each axis, the CT-contact edge
+  field through `ct_contact` plane by plane, Heun, refluxing). Checked on an oblique
+  Alfvén wave (second order), the z-uniform Orszag–Tang vortex (equal to `MHD2D`), the
+  resistive decay of a force-free field, a 3D blast wave and on 2–3 ranks. Tutorial
+  "MHD in 3D".
+
 - `IonizationRegion` (`carafe.irm`): the outputs of the IRM papers, the current at the
   target by carrier (`target_current`), the ion fluxes to the target and the bulk, the
   ionization probability `alpha`, `beta_t` over the time, the power balance of the thermal
